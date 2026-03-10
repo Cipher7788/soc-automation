@@ -1,0 +1,55 @@
+{
+  "id": "brute-force-wf-001",
+  "workflow_id": "brute-force-wf-001",
+  "name": "brute_force",
+  "description": "Automated response to brute force / multiple failed login attempts",
+  "trigger": {
+    "type": "wazuh_alert",
+    "condition": "rule.groups contains authentication_failures"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "check_ip_reputation",
+      "action": "abuseipdb.lookup",
+      "parameters": {
+        "ip": "{{alert.source_ip}}",
+        "max_age_days": 90
+      }
+    },
+    {
+      "step_id": 2,
+      "name": "block_ip_if_malicious",
+      "action": "firewall.block_ip",
+      "parameters": {
+        "ip": "{{alert.source_ip}}",
+        "reason": "Brute force attack detected — AbuseIPDB score: {{step1.abuse_score}}"
+      },
+      "condition": "step1.abuse_score > 50",
+      "depends_on": [1]
+    },
+    {
+      "step_id": 3,
+      "name": "create_thehive_alert",
+      "action": "thehive.create_alert",
+      "parameters": {
+        "title": "Brute Force Attack from {{alert.source_ip}}",
+        "severity": 2,
+        "tags": ["brute-force", "authentication", "wazuh"],
+        "source": "Wazuh",
+        "description": "Multiple failed login attempts detected from {{alert.source_ip}}"
+      },
+      "depends_on": [2]
+    },
+    {
+      "step_id": 4,
+      "name": "notify_soc",
+      "action": "notify.slack",
+      "parameters": {
+        "message": ":lock: *Brute Force Detected*\nSource IP: {{alert.source_ip}}\nAbuseIPDB Score: {{step1.abuse_score}}\nIP Blocked: {{step2.blocked}}\nAlert ID: {{step3.alert_id}}",
+        "channel": "#soc-alerts"
+      },
+      "depends_on": [3]
+    }
+  ]
+}

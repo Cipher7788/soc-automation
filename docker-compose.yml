@@ -1,0 +1,295 @@
+version: "3.8"
+
+networks:
+  soc-net:
+    driver: bridge
+
+volumes:
+  wazuh-data:
+  wazuh-logs:
+  elasticsearch-data:
+  thehive-data:
+  cassandra-data:
+  minio-data:
+  shuffle-data:
+  cortex-data:
+
+# ─── Wazuh Stack ─────────────────────────────────────────────────────────────
+services:
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.3
+    container_name: wazuh-manager
+    hostname: wazuh-manager
+    restart: unless-stopped
+    ports:
+      - "1514:1514"       # Agent events
+      - "1515:1515"       # Agent enrollment
+      - "514:514/udp"     # Syslog
+      - "55000:55000"     # REST API
+    environment:
+      - INDEXER_URL=https://wazuh-indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=changeme
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=changeme
+    volumes:
+      - wazuh-data:/var/ossec/data
+      - wazuh-logs:/var/ossec/logs
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://localhost:55000/", "-k", "-u", "wazuh-wui:changeme"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.3
+    container_name: wazuh-indexer
+    hostname: wazuh-indexer
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch-data:/var/lib/wazuh-indexer
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.7.3
+    container_name: wazuh-dashboard
+    hostname: wazuh-dashboard
+    restart: unless-stopped
+    ports:
+      - "443:5601"
+    environment:
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=changeme
+      - WAZUH_API_URL=https://wazuh-manager
+      - DASHBOARD_USERNAME=kibanaserver
+      - DASHBOARD_PASSWORD=kibanaserver
+    depends_on:
+      - wazuh-indexer
+      - wazuh-manager
+    networks:
+      - soc-net
+
+# ─── TheHive Stack ───────────────────────────────────────────────────────────
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    hostname: cassandra
+    restart: unless-stopped
+    environment:
+      - CASSANDRA_CLUSTER_NAME=thehive
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - HEAP_NEWSIZE=128M
+      - MAX_HEAP_SIZE=512M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=changeme
+    volumes:
+      - minio-data:/data
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  thehive:
+    image: strangebee/thehive:5.3
+    container_name: thehive
+    hostname: thehive
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - JVM_OPTS=-Xms512m -Xmx1g
+    command:
+      - --secret
+      - "changeme"
+      - "--cql-hostnames"
+      - "cassandra"
+      - "--index-backend"
+      - "elasticsearch"
+      - "--es-hostnames"
+      - "wazuh-indexer"
+      - "--s3-endpoint"
+      - "http://minio:9000"
+      - "--s3-access-key"
+      - "minioadmin"
+      - "--s3-secret-key"
+      - "changeme"
+      - "--s3-use-path-access-style"
+    volumes:
+      - thehive-data:/opt/thp/thehive/data
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  cortex:
+    image: thehiveproject/cortex:3.1.8
+    container_name: cortex
+    hostname: cortex
+    restart: unless-stopped
+    ports:
+      - "9002:9001"
+    environment:
+      - JVM_OPTS=-Xms256m -Xmx512m
+    volumes:
+      - cortex-data:/var/run/cortex
+    depends_on:
+      - wazuh-indexer
+    networks:
+      - soc-net
+
+# ─── Shuffle SOAR ────────────────────────────────────────────────────────────
+  shuffle-backend:
+    image: ghcr.io/shuffle/shuffle-backend:latest
+    container_name: shuffle-backend
+    hostname: shuffle-backend
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - DATASTORE_EMULATOR_HOST=nosql:8000
+      - GOGC=off
+      - SHUFFLE_APP_HOTLOAD_FOLDER=/shuffle-apps
+      - SHUFFLE_FILE_LOCATION=/shuffle-files
+      - SHUFFLE_OPENSEARCH_URL=https://wazuh-indexer:9200
+      - ORG_ID=default
+      - SHUFFLE_BASE_URL=http://shuffle-backend:5001
+    volumes:
+      - shuffle-data:/shuffle-files
+    depends_on:
+      - nosql
+      - wazuh-indexer
+    networks:
+      - soc-net
+
+  shuffle-frontend:
+    image: ghcr.io/shuffle/shuffle-frontend:latest
+    container_name: shuffle-frontend
+    hostname: shuffle-frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+      - "3443:443"
+    environment:
+      - BACKEND_HOSTNAME=shuffle-backend
+    depends_on:
+      - shuffle-backend
+    networks:
+      - soc-net
+
+  shuffle-orborus:
+    image: ghcr.io/shuffle/shuffle-orborus:latest
+    container_name: shuffle-orborus
+    hostname: shuffle-orborus
+    restart: unless-stopped
+    environment:
+      - SHUFFLE_APP_SDK_VERSION=1.1.0
+      - SHUFFLE_WORKER_VERSION=latest
+      - ORG_ID=default
+      - ENVIRONMENT_NAME=Shuffle
+      - BASE_URL=http://shuffle-backend:5001
+      - DOCKER_API_VERSION=1.40
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - shuffle-backend
+    networks:
+      - soc-net
+
+  nosql:
+    image: google/cloud-sdk:emulators
+    container_name: nosql
+    hostname: nosql
+    restart: unless-stopped
+    command: gcloud beta emulators datastore start --data-dir=/data --host-port=0.0.0.0:8000 --no-store-on-disk --consistency=1
+    ports:
+      - "8000:8000"
+    networks:
+      - soc-net
+
+# ─── SOC Automation App ──────────────────────────────────────────────────────
+  soc-automation:
+    build: .
+    container_name: soc-automation
+    hostname: soc-automation
+    restart: unless-stopped
+    depends_on:
+      wazuh-manager:
+        condition: service_healthy
+      thehive:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - WAZUH_HOST=https://wazuh-manager:55000
+      - THEHIVE_URL=http://thehive:9000
+      - SHUFFLE_URL=http://shuffle-backend:5001
+    volumes:
+      - ./models:/app/models
+      - ./rules:/app/rules
+      - ./playbooks:/app/playbooks
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import src.main"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
