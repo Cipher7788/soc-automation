@@ -1,0 +1,71 @@
+{
+  "id": "suspicious-network-wf-001",
+  "workflow_id": "suspicious-network-wf-001",
+  "name": "suspicious_network",
+  "description": "Automated response to suspicious network activity / unusual traffic patterns",
+  "trigger": {
+    "type": "wazuh_alert",
+    "condition": "rule.groups contains network OR rule.groups contains firewall"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "analyze_traffic",
+      "action": "network_analyzer.analyze",
+      "parameters": {
+        "source_ip": "{{alert.source_ip}}",
+        "destination_ip": "{{alert.destination_ip}}",
+        "protocol": "{{alert.protocol}}",
+        "bytes": "{{alert.bytes}}"
+      }
+    },
+    {
+      "step_id": 2,
+      "name": "check_threat_intel",
+      "action": "threat_intel.multi_lookup",
+      "parameters": {
+        "indicators": [
+          {"value": "{{alert.source_ip}}", "type": "ip"},
+          {"value": "{{alert.destination_ip}}", "type": "ip"},
+          {"value": "{{alert.domain}}", "type": "domain"}
+        ]
+      },
+      "depends_on": [1]
+    },
+    {
+      "step_id": 3,
+      "name": "create_case",
+      "action": "thehive.create_case",
+      "parameters": {
+        "title": "Suspicious Network Activity — {{alert.source_ip}} → {{alert.destination_ip}}",
+        "severity": 2,
+        "tags": ["network", "suspicious", "wazuh"],
+        "description": "Unusual network traffic detected.\nSource: {{alert.source_ip}}\nDestination: {{alert.destination_ip}}\nProtocol: {{alert.protocol}}\nThreat Intel: {{step2.summary}}"
+      },
+      "depends_on": [2]
+    },
+    {
+      "step_id": 4,
+      "name": "investigate",
+      "action": "wazuh.get_agent_events",
+      "parameters": {
+        "agent_id": "{{alert.agent_id}}",
+        "time_range_minutes": 30
+      },
+      "depends_on": [3]
+    },
+    {
+      "step_id": 5,
+      "name": "respond",
+      "action": "conditional",
+      "conditions": [
+        {
+          "if": "step2.malicious == true",
+          "then": "firewall.block_ip",
+          "parameters": {"ip": "{{alert.source_ip}}"}
+        }
+      ],
+      "depends_on": [4]
+    }
+  ]
+}
