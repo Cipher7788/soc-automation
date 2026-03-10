@@ -13,6 +13,7 @@ volumes:
   minio-data:
   shuffle-data:
   cortex-data:
+  grafana-data:
 
 # ─── Wazuh Stack ─────────────────────────────────────────────────────────────
 services:
@@ -285,6 +286,8 @@ services:
       - ./models:/app/models
       - ./rules:/app/rules
       - ./playbooks:/app/playbooks
+      - ./data:/app/data
+      - ./reports:/app/reports
     networks:
       - soc-net
     healthcheck:
@@ -292,4 +295,33 @@ services:
       interval: 60s
       timeout: 15s
       retries: 3
+      start_period: 30s
+
+# ─── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    hostname: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-opensearch-datasource
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboard/grafana/provisioning:/etc/grafana/provisioning
+      - ./dashboard/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./reports:/var/lib/grafana/reports
+    depends_on:
+      - wazuh-indexer
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 30s

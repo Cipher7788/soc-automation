@@ -19,6 +19,10 @@ setup(
         "jinja2>=3.1.2",
         "pydantic>=2.4.0",
         "schedule>=1.2.0",
+        "openai>=1.0.0",
+        "reportlab>=4.0",
+        "stix2>=3.0.0",
+        "taxii2-client>=2.3.0",
     ],
     extras_require={
         "dev": [

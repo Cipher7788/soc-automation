@@ -17,12 +17,19 @@ from src.detection.ioc_detector import IOCDetector
 from src.detection.threat_intel import ThreatIntelManager
 from src.detection.ml_analyzer import MLAnalyzer
 from src.detection.rules_engine import RulesEngine
+from src.detection.mitre_mapper import MITREMapper
+from src.detection.ai_prioritizer import AlertPrioritizer
 from src.alerting.thehive_client import TheHiveClient, HiveAlert, HiveCase
 from src.alerting.alert_manager import AlertManager, Alert
 from src.alerting.notifier import Notifier
 from src.alerting.escalation import EscalationManager
+from src.alerting.teams_notifier import TeamsNotifier
 from src.response.shuffle_client import ShuffleClient
 from src.response.playbook_manager import PlaybookManager
+from src.response.incident_responder import IncidentResponder
+from src.enrichment.threat_intel_enricher import ThreatIntelEnricher
+from src.enrichment.ioc_database import IOCDatabase
+from src.reporting.report_generator import ReportGenerator
 from src.utils.helpers import severity_to_int, truncate
 
 setup_logging(settings.log_level)
@@ -35,11 +42,16 @@ class SOCOrchestrator:
     Event loop:
     1. Poll Wazuh for new alerts
     2. Normalize and enrich alerts
-    3. Run IOC detection (pattern + ML)
+    3. Run IOC detection (pattern + ML + IOC database)
     4. Run correlation rules
-    5. Create TheHive alerts/cases for detections
-    6. Trigger appropriate Shuffle playbooks
-    7. Send notifications
+    5. Enrich IOCs via threat intelligence APIs
+    6. Map to MITRE ATT&CK framework
+    7. Prioritize alerts using AI/ML
+    8. Create TheHive alerts/cases for detections
+    9. Trigger appropriate Shuffle playbooks
+    10. Execute automated incident response
+    11. Generate incident reports
+    12. Send notifications (Slack, Email, Teams)
     """
 
     def __init__(self) -> None:
@@ -59,7 +71,12 @@ class SOCOrchestrator:
         self.normalizer = LogNormalizer()
 
         # --- Detection ---
-        self.ioc_detector = IOCDetector()
+        self.ioc_database = IOCDatabase(db_path=settings.ioc_database_path)
+        self.ioc_detector = IOCDetector(
+            malicious_ips=self.ioc_database.get_malicious_ips(),
+            malicious_domains=self.ioc_database.get_malicious_domains(),
+            malicious_hashes=self.ioc_database.get_malware_hashes(),
+        )
         self.threat_intel = ThreatIntelManager(
             abuseipdb_key=settings.threat_intel.abuseipdb_api_key,
             virustotal_key=settings.threat_intel.virustotal_api_key,
@@ -68,6 +85,16 @@ class SOCOrchestrator:
         )
         self.ml_analyzer = MLAnalyzer(model_path=settings.ml_model_path)
         self.rules_engine = RulesEngine(rules_dir=settings.rules_dir)
+        self.mitre_mapper = MITREMapper()
+        self.alert_prioritizer = AlertPrioritizer()
+
+        # --- Enrichment ---
+        self.threat_intel_enricher = ThreatIntelEnricher(
+            virustotal_api_key=settings.threat_intel.virustotal_api_key,
+            abuseipdb_api_key=settings.threat_intel.abuseipdb_api_key,
+            otx_api_key=settings.threat_intel.otx_api_key,
+            cache_ttl=settings.threat_intel.cache_ttl,
+        )
 
         # --- Alerting ---
         self.hive_client = TheHiveClient(
@@ -87,6 +114,9 @@ class SOCOrchestrator:
             slack_webhook_url=settings.notifications.slack_webhook_url,
             webhook_url=settings.notifications.webhook_url,
         )
+        self.teams_notifier = TeamsNotifier(
+            webhook_url=settings.notifications.teams_webhook_url,
+        )
         self.escalation_mgr = EscalationManager()
 
         # --- Response ---
@@ -98,6 +128,14 @@ class SOCOrchestrator:
             shuffle_client=self.shuffle_client,
             playbooks_dir=settings.playbooks_dir,
         )
+        self.incident_responder = IncidentResponder(
+            wazuh_client=self.wazuh,
+            hive_client=self.hive_client,
+            shuffle_client=self.shuffle_client,
+        )
+
+        # --- Reporting ---
+        self.report_generator = ReportGenerator(reports_dir=settings.reports_dir)
 
         self._running = False
 
@@ -156,19 +194,50 @@ class SOCOrchestrator:
             if not ioc_matches and not rule_matches and not anomaly.is_anomaly:
                 continue
 
-            # 5. Build internal alert
-            severity = norm_log.severity or "medium"
+            # 5. Threat intelligence enrichment
+            enrichment_results = []
             ioc_data = [
                 {"type": m.ioc_type, "value": m.value, "confidence": m.confidence}
                 for m in ioc_matches
             ]
+            if ioc_data and (settings.threat_intel.virustotal_api_key or settings.threat_intel.abuseipdb_api_key):
+                try:
+                    enrichment_results = await loop.run_in_executor(
+                        None, lambda: self.threat_intel_enricher.enrich_batch(ioc_data)
+                    )
+                except Exception as exc:
+                    logger.warning("Threat intel enrichment failed: %s", exc)
+
+            # 6. MITRE ATT&CK mapping
+            severity = norm_log.severity or "medium"
+            alert_title = self._build_title(norm_log, ioc_matches, rule_matches)
+            rule_names = [r.rule_name for r in rule_matches]
+            tags = list({m.ioc_type for m in ioc_matches} | set(rule_names))
+            mitre_techniques = self.mitre_mapper.map_alert(alert_title, rule_names, tags)
+            mitre_ids = [t.technique_id for t in mitre_techniques]
+
+            # 7. AI prioritization
+            alert_type = self._infer_alert_type(rule_matches, ioc_matches)
+            priority_features = {
+                "ip_reputation": max((r.confidence_score for r in enrichment_results), default=0.0),
+                "is_known_ioc": float(len(ioc_matches) > 0),
+                "rule_severity_score": severity_to_int(severity) * 25.0,
+                "anomaly_score": anomaly.anomaly_score if anomaly.is_anomaly else 0.0,
+                "process_name_risk": 0.5 if "powershell" in text.lower() else 0.0,
+                "user_privilege": 0.8 if "admin" in text.lower() or "root" in text.lower() else 0.3,
+                "hour_of_day": float(time.localtime().tm_hour),
+                "log_frequency": 1.0,
+            }
+            priority_result = self.alert_prioritizer.prioritize(priority_features)
+
+            # 8. Build internal alert
             alert = Alert(
                 alert_id=str(uuid.uuid4()),
-                title=self._build_title(norm_log, ioc_matches, rule_matches),
-                description=self._build_description(norm_log, ioc_matches, rule_matches, anomaly),
+                title=alert_title,
+                description=self._build_description(norm_log, ioc_matches, rule_matches, anomaly, mitre_ids, enrichment_results),
                 severity=severity,
                 source="wazuh",
-                tags=list({m.ioc_type for m in ioc_matches} | {r.rule_name for r in rule_matches}),
+                tags=tags + mitre_ids,
                 iocs=ioc_data,
                 raw_data=norm_log.model_dump(),
             )
@@ -176,17 +245,65 @@ class SOCOrchestrator:
             if not processed:
                 continue
 
-            # 6. Create TheHive alert
+            # 9. Create TheHive alert
             await loop.run_in_executor(None, self._create_hive_alert, processed)
 
-            # 7. Trigger Shuffle playbook
-            alert_type = self._infer_alert_type(rule_matches, ioc_matches)
+            # 10. Trigger Shuffle playbook
             await loop.run_in_executor(
                 None,
                 lambda: self.playbook_mgr.execute(alert_type, processed.alert_id, {"severity": severity}),
             )
 
-            # 8. Notify
+            # 11. Automated incident response
+            response_actions = []
+            if priority_result.priority in ("high", "critical"):
+                try:
+                    response_actions = await loop.run_in_executor(
+                        None,
+                        lambda: self.incident_responder.respond(
+                            processed, enrichment_results, priority_result.priority, alert_type
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("Incident response failed: %s", exc)
+
+            # 12. Generate incident report for high/critical
+            if priority_result.priority in ("high", "critical"):
+                incident_data = {
+                    "incident_id": processed.alert_id[:8].upper(),
+                    "attack_type": alert_type.replace("_", " ").title(),
+                    "severity": severity,
+                    "mitre_technique": ", ".join(mitre_ids),
+                    "iocs": ioc_data,
+                    "response_actions": [
+                        {
+                            "action_type": a.action_type,
+                            "target": a.target,
+                            "status": a.status,
+                            "result": str(a.result),
+                        }
+                        for a in response_actions
+                    ],
+                    "timeline": [
+                        {"time": norm_log.timestamp.isoformat() if norm_log.timestamp else "", "event": alert_title}
+                    ],
+                }
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: self.report_generator.generate_report(incident_data, fmt="html"),
+                    )
+                except Exception as exc:
+                    logger.warning("Report generation failed: %s", exc)
+
+            # 13. Notify
+            notification_details = {
+                "host": norm_log.agent_name or "",
+                "mitre_technique": ", ".join(mitre_ids) if mitre_ids else "N/A",
+                "response_action": ", ".join(a.action_type for a in response_actions) if response_actions else "None",
+                "iocs": ", ".join(f"{i['type']}:{i['value']}" for i in ioc_data[:3]) if ioc_data else "None",
+                "priority": priority_result.priority,
+            }
             await loop.run_in_executor(
                 None,
                 lambda: self.notifier.notify(
@@ -194,6 +311,15 @@ class SOCOrchestrator:
                     description=truncate(processed.description, 500),
                     severity=processed.severity,
                     score=processed.composite_score,
+                ),
+            )
+            await loop.run_in_executor(
+                None,
+                lambda: self.teams_notifier.send(
+                    title=processed.title,
+                    description=truncate(processed.description, 500),
+                    severity=processed.severity,
+                    details=notification_details,
                 ),
             )
 
@@ -211,7 +337,15 @@ class SOCOrchestrator:
             return f"IOC Detected: {ioc_matches[0].ioc_type.upper()} — {ioc_matches[0].value}"
         return f"Security Event: {log.event_type or 'Unknown'}"
 
-    def _build_description(self, log: Any, ioc_matches: list, rule_matches: list, anomaly: Any) -> str:
+    def _build_description(
+        self,
+        log: Any,
+        ioc_matches: list,
+        rule_matches: list,
+        anomaly: Any,
+        mitre_ids: list[str],
+        enrichment_results: list,
+    ) -> str:
         parts = []
         if log.rule_description:
             parts.append(f"Rule: {log.rule_description}")
@@ -221,6 +355,12 @@ class SOCOrchestrator:
             parts.append(f"IOCs: {', '.join(f'{m.ioc_type}:{m.value}' for m in ioc_matches)}")
         if anomaly.is_anomaly:
             parts.append(f"ML anomaly: {anomaly.explanation}")
+        if mitre_ids:
+            parts.append(f"MITRE: {', '.join(mitre_ids)}")
+        if enrichment_results:
+            malicious = [r for r in enrichment_results if r.reputation == "Malicious"]
+            if malicious:
+                parts.append(f"TI Enrichment: {len(malicious)} malicious IOC(s) confirmed")
         if log.source_ip:
             parts.append(f"Source IP: {log.source_ip}")
         if log.agent_name:
@@ -277,3 +417,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

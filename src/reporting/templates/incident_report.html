@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SOC Incident Report — {{ incident_id }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; color: #222; }
+    h1 { color: #c0392b; }
+    h2 { color: #2c3e50; border-bottom: 1px solid #bdc3c7; padding-bottom: 4px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    th, td { border: 1px solid #bdc3c7; padding: 8px 12px; text-align: left; }
+    th { background: #ecf0f1; }
+    .severity-critical { color: #c0392b; font-weight: bold; }
+    .severity-high { color: #e67e22; font-weight: bold; }
+    .severity-medium { color: #f1c40f; font-weight: bold; }
+    .severity-low { color: #27ae60; font-weight: bold; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.85em; color: #fff;
+    }
+    .badge-critical { background: #c0392b; }
+    .badge-high { background: #e67e22; }
+    .badge-medium { background: #f39c12; }
+    .badge-low { background: #27ae60; }
+    ul { margin: 0; padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <h1>🚨 SOC Incident Report</h1>
+
+  <h2>Summary</h2>
+  <table>
+    <tr><th>Incident ID</th><td><strong>{{ incident_id }}</strong></td></tr>
+    <tr><th>Generated At</th><td>{{ generated_at }}</td></tr>
+    <tr><th>Attack Type</th><td>{{ attack_type }}</td></tr>
+    <tr><th>Severity</th><td>
+      <span class="badge badge-{{ severity }}">{{ severity | upper }}</span>
+    </td></tr>
+    <tr><th>MITRE ATT&amp;CK</th><td>
+      {% if mitre_technique %}
+        <a href="https://attack.mitre.org/techniques/{{ mitre_technique | replace('.', '/') }}/" target="_blank">{{ mitre_technique }}</a>
+      {% else %}N/A{% endif %}
+    </td></tr>
+  </table>
+
+  {% if iocs %}
+  <h2>Indicators of Compromise (IOCs)</h2>
+  <table>
+    <tr><th>Type</th><th>Value</th><th>Confidence</th></tr>
+    {% for ioc in iocs %}
+    <tr>
+      <td>{{ ioc.get('type', ioc.get('ioc_type', '')) }}</td>
+      <td>{{ ioc.get('value', ioc.get('ioc_value', '')) }}</td>
+      <td>{{ ioc.get('confidence', '') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if timeline %}
+  <h2>Timeline</h2>
+  <table>
+    <tr><th>Time</th><th>Event</th></tr>
+    {% for event in timeline %}
+    <tr>
+      <td>{{ event.get('time', event.get('timestamp', '')) }}</td>
+      <td>{{ event.get('event', event.get('message', '')) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if response_actions %}
+  <h2>Response Actions Taken</h2>
+  <table>
+    <tr><th>Action</th><th>Target</th><th>Status</th><th>Result</th></tr>
+    {% for action in response_actions %}
+    <tr>
+      <td>{{ action.get('action_type', '') }}</td>
+      <td>{{ action.get('target', '') }}</td>
+      <td>{{ action.get('status', '') }}</td>
+      <td>{{ action.get('result', '') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if recommendations %}
+  <h2>Recommendations</h2>
+  <ul>
+    {% for rec in recommendations %}
+    <li>{{ rec }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <hr />
+  <p style="color:#888; font-size:0.85em;">
+    Generated automatically by SOC Automation | {{ generated_at }}
+  </p>
+</body>
+</html>
