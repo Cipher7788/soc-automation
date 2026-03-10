@@ -1,0 +1,20 @@
+name: brute_force_ssh
+description: "Simulates repeated SSH brute-force login attempts against a target host."
+mitre_technique: T1110
+severity: high
+steps:
+  - action: ssh_failed_auth
+    log_template: "sshd[1234]: Failed password for {username} from {src_ip} port {port} ssh2"
+    expected_detection: brute_force
+  - action: ssh_failed_auth
+    log_template: "sshd[1234]: Failed password for {username} from {src_ip} port {port} ssh2 (attempt {attempt_count})"
+    expected_detection: brute_force
+  - action: ssh_failed_auth
+    log_template: "sshd[1234]: Invalid user administrator from {src_ip} port {port}"
+    expected_detection: brute_force
+  - action: account_lockout
+    log_template: "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 user={username} rhost={src_ip}"
+    expected_detection: brute_force
+  - action: ssh_success
+    log_template: "sshd[1234]: Accepted password for {username} from {src_ip} port {port} ssh2"
+    expected_detection: successful_auth_after_brute_force

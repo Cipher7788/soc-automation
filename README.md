@@ -1,6 +1,6 @@
 # SOC Automation System
 
-A comprehensive **Security Operations Center (SOC) automation system** built with Python and AI, integrating Wazuh SIEM, TheHive case management, and Shuffle SOAR for end-to-end security alert ingestion, analysis, and response.
+A comprehensive **Security Operations Center (SOC) automation system** built with Python and AI, integrating Wazuh SIEM, TheHive case management, and Shuffle SOAR for end-to-end security alert ingestion, analysis, enrichment, response, and reporting.
 
 ---
 
@@ -16,20 +16,26 @@ A comprehensive **Security Operations Center (SOC) automation system** built wit
   └──────┬──────┘
          │ Wazuh REST API
          ▼
-  ┌───────────────────┐
-  │   Python Engine    │  ◄── Core SOC Automation
-  │  (AI/ML + Logic)   │       - IOC Detection
-  │                    │       - Anomaly Detection (ML)
-  │                    │       - Rules Engine (YAML)
-  │                    │       - Alert Correlation
-  └──────┬─────────────┘
+  ┌─────────────────────────────────────────────────────┐
+  │          Python SOC Automation Engine                │
+  │                                                     │
+  │  1. Ingestion   → LogCollector, LogNormalizer        │
+  │  2. Detection   → IOCDetector, MLAnalyzer,           │
+  │                   RulesEngine, IOCDatabase           │
+  │  3. Enrichment  → ThreatIntelEnricher (VT/AIPDB/OTX)│
+  │  4. Mapping     → MITREMapper (ATT&CK framework)     │
+  │  5. Prioritize  → AlertPrioritizer (AI/ML)           │
+  │  6. Response    → IncidentResponder, PlaybookManager  │
+  │  7. Reporting   → ReportGenerator (HTML/MD/JSON)     │
+  │  8. Notify      → Notifier (Slack/Email/Teams/Webhook)│
+  └──────┬───────────────────────────────────────────────┘
          │
     ┌────┴──────┐
     ▼           ▼
-┌────────┐  ┌─────────┐
-│TheHive │  │ Shuffle  │  ◄── Case Management + SOAR
-│(Cases) │  │(Playbooks│
-└────────┘  └─────────┘
+┌────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+│TheHive │  │ Shuffle  │  │ Grafana │  │ Reports │
+│(Cases) │  │(Playbooks│  │Dashboard│  │(HTML/MD)│
+└────────┘  └─────────┘  └─────────┘  └─────────┘
 ```
 
 ---
@@ -55,6 +61,7 @@ This starts:
 - Wazuh Manager + Indexer + Dashboard
 - TheHive 5 + Cassandra + MinIO
 - Shuffle SOAR backend + frontend
+- **Grafana** (port 3000) with pre-provisioned SOC dashboard
 - The Python SOC automation engine
 
 ### 3. Run locally (development)
@@ -92,7 +99,11 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 | `VIRUSTOTAL_API_KEY` | VirusTotal API key |
 | `OTX_API_KEY` | AlienVault OTX API key |
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook for notifications |
+| `TEAMS_WEBHOOK_URL` | Microsoft Teams incoming webhook |
 | `SMTP_HOST` | SMTP server for email notifications |
+| `OPENAI_API_KEY` | OpenAI API key (optional, for AI features) |
+| `IOC_DATABASE_PATH` | Path to the local IOC JSON database (default: `data/ioc_database.json`) |
+| `REPORTS_DIR` | Directory to store generated reports (default: `reports`) |
 | `LOG_LEVEL` | Logging level (default: `INFO`) |
 | `WAZUH_POLL_INTERVAL` | Seconds between Wazuh polls (default: `60`) |
 
@@ -110,17 +121,37 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 - **`threat_intel.py`** — AbuseIPDB, VirusTotal, OTX threat intelligence integration with caching
 - **`ml_analyzer.py`** — Isolation Forest anomaly detection with model persistence
 - **`rules_engine.py`** — YAML-based detection rules engine with hot-reload
+- **`mitre_mapper.py`** — MITRE ATT&CK mapping with 30+ built-in techniques across all tactics
+- **`ai_prioritizer.py`** — GradientBoosting-based alert prioritization with rule-based fallback
+
+### `src/enrichment/`
+- **`threat_intel_enricher.py`** — IOC enrichment via VirusTotal, AbuseIPDB, and AlienVault OTX with TTL caching
+- **`ioc_database.py`** — Local JSON-backed IOC repository with CRUD, bulk import, and CSV/JSON export
 
 ### `src/alerting/`
 - **`thehive_client.py`** — TheHive v5 API client for alert/case management
 - **`alert_manager.py`** — Alert deduplication, correlation, and severity scoring
 - **`notifier.py`** — Multi-channel notifications (email, Slack, webhook)
+- **`teams_notifier.py`** — Microsoft Teams Adaptive Card notifications with severity colour coding
 - **`escalation.py`** — SLA tracking and automatic escalation chains
 
 ### `src/response/`
 - **`shuffle_client.py`** — Shuffle SOAR API client for workflow execution
 - **`playbook_manager.py`** — Alert-type-to-playbook mapping with approval gates
 - **`actions.py`** — Automated response actions (block IP, isolate host, disable user)
+- **`incident_responder.py`** — Automated incident response engine with configurable playbooks per alert type and severity
+
+### `src/reporting/`
+- **`report_generator.py`** — Jinja2-based incident report generator supporting HTML, Markdown, and JSON output formats
+
+### `src/simulation/`
+- **`attack_simulator.py`** — Attack scenario simulator for SOC pipeline testing; generates realistic log entries from YAML scenario files
+- **`scenarios/`** — 5 built-in YAML attack scenarios: brute_force_ssh, powershell_exploitation, credential_dumping, port_scan, data_exfiltration
+
+### `dashboard/grafana/`
+- Pre-configured Grafana dashboard provisioning for SOC visibility
+- 10 panels: attack timeline, severity distribution, top sources, top hosts, IOC types, MITRE techniques, and more
+- See `dashboard/README.md` for setup instructions
 
 ### `playbooks/`
 JSON workflow definitions for Shuffle:
@@ -132,6 +163,35 @@ JSON workflow definitions for Shuffle:
 YAML detection rules:
 - `ioc_rules.yml` — IOC-based rules (malicious IPs, C2, scanning, malware hashes)
 - `correlation_rules.yml` — Event correlation (brute force, lateral movement, exfiltration, privilege escalation)
+
+### `data/`
+- `ioc_database.json` — Seed IOC database with sample malicious IPs, domains, and hashes
+
+---
+
+## SOC Pipeline Flow
+
+```
+Wazuh Alert
+    │
+    ├─ Normalize (LogNormalizer)
+    ├─ ML Anomaly Detection (MLAnalyzer)
+    ├─ IOC Detection (IOCDetector + IOCDatabase)
+    ├─ Rules Evaluation (RulesEngine)
+    ├─ Threat Intel Enrichment (ThreatIntelEnricher → VT/AbuseIPDB/OTX)
+    ├─ MITRE ATT&CK Mapping (MITREMapper)
+    ├─ AI Prioritization (AlertPrioritizer → GradientBoosting)
+    ├─ TheHive Case Creation
+    ├─ Shuffle Playbook Execution
+    ├─ Automated Incident Response (IncidentResponder)
+    │    ├─ block_ip / add_firewall_rule
+    │    ├─ disable_user
+    │    ├─ kill_process
+    │    ├─ isolate_host (with approval gate)
+    │    └─ forensic_snapshot (with approval gate)
+    ├─ Incident Report Generation (HTML/Markdown)
+    └─ Notifications (Slack + Teams + Email + Webhook)
+```
 
 ---
 

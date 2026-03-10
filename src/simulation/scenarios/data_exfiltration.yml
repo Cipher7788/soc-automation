@@ -1,0 +1,20 @@
+name: data_exfiltration
+description: "Simulates data exfiltration via DNS tunneling and large file transfers."
+mitre_technique: T1041
+severity: high
+steps:
+  - action: dns_tunnel_query
+    log_template: "dns query: {hostname} → dGhpcyBpcyBleGZpbHRyYXRlZCBkYXRh.{domain} type TXT"
+    expected_detection: dns_tunneling
+  - action: dns_tunnel_query
+    log_template: "dns query: {hostname} → c2VjcmV0LWNyZWRlbnRpYWxz.{domain} type TXT"
+    expected_detection: dns_tunneling
+  - action: large_upload
+    log_template: "netflow: src={src_ip} dst={dst_ip} proto=TCP dport={port} bytes_out=104857600"
+    expected_detection: data_exfiltration
+  - action: c2_beacon
+    log_template: "http outbound: {hostname} → http://{domain}/update.php?id=abc123 (periodic beacon)"
+    expected_detection: c2_communication
+  - action: archive_created
+    log_template: "File created: C:\\Users\\{username}\\AppData\\Local\\Temp\\archive.zip size=52MB"
+    expected_detection: data_staging

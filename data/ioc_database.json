@@ -1,0 +1,87 @@
+{
+  "malicious_ips": [
+    {
+      "value": "185.220.101.1",
+      "type": "ip",
+      "source": "TOR Exit Node List",
+      "confidence": 85.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["tor", "exit-node"]
+    },
+    {
+      "value": "45.142.212.100",
+      "type": "ip",
+      "source": "AbuseIPDB",
+      "confidence": 92.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["botnet", "scanner"]
+    },
+    {
+      "value": "198.51.100.1",
+      "type": "ip",
+      "source": "demo-blocklist",
+      "confidence": 95.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo"]
+    }
+  ],
+  "malicious_domains": [
+    {
+      "value": "malware.example.com",
+      "type": "domain",
+      "source": "demo-blocklist",
+      "confidence": 95.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo", "c2"]
+    },
+    {
+      "value": "c2.badactor.net",
+      "type": "domain",
+      "source": "demo-blocklist",
+      "confidence": 95.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo", "c2"]
+    },
+    {
+      "value": "phishing.evil.org",
+      "type": "domain",
+      "source": "demo-blocklist",
+      "confidence": 90.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo", "phishing"]
+    }
+  ],
+  "malware_hashes": [
+    {
+      "value": "d41d8cd98f00b204e9800998ecf8427e",
+      "type": "md5",
+      "source": "demo-blocklist",
+      "confidence": 80.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo"]
+    },
+    {
+      "value": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+      "type": "sha1",
+      "source": "demo-blocklist",
+      "confidence": 80.0,
+      "first_seen": 1700000000,
+      "last_seen": 1700000000,
+      "tags": ["demo"]
+    }
+  ],
+  "malicious_urls": [],
+  "malicious_emails": [],
+  "metadata": {
+    "last_updated": "2024-01-01T00:00:00Z",
+    "total_indicators": 8,
+    "sources": ["demo-blocklist", "AbuseIPDB", "TOR Exit Node List"]
+  }
+}

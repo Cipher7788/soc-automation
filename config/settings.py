@@ -62,6 +62,7 @@ class NotificationConfig:
     smtp_to: str = field(default_factory=lambda: _env("SMTP_TO", ""))
     slack_webhook_url: str = field(default_factory=lambda: _env("SLACK_WEBHOOK_URL", ""))
     webhook_url: str = field(default_factory=lambda: _env("WEBHOOK_URL", ""))
+    teams_webhook_url: str = field(default_factory=lambda: _env("TEAMS_WEBHOOK_URL", ""))
 
 
 @dataclass
@@ -72,6 +73,9 @@ class AppConfig:
     ml_model_path: str = field(default_factory=lambda: _env("ML_MODEL_PATH", "models/isolation_forest.pkl"))
     rules_dir: str = field(default_factory=lambda: _env("RULES_DIR", "rules"))
     playbooks_dir: str = field(default_factory=lambda: _env("PLAYBOOKS_DIR", "playbooks"))
+    ioc_database_path: str = field(default_factory=lambda: _env("IOC_DATABASE_PATH", "data/ioc_database.json"))
+    reports_dir: str = field(default_factory=lambda: _env("REPORTS_DIR", "reports"))
+    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     wazuh: WazuhConfig = field(default_factory=WazuhConfig)
     thehive: TheHiveConfig = field(default_factory=TheHiveConfig)
     shuffle: ShuffleConfig = field(default_factory=ShuffleConfig)

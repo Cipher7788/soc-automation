@@ -1,0 +1,20 @@
+name: port_scan
+description: "Simulates a network port scan originating from an internal host."
+mitre_technique: T1046
+severity: medium
+steps:
+  - action: nmap_scan_start
+    log_template: "firewall: DENY IN tcp -- {src_ip} {dst_ip} --dport 22 SYN"
+    expected_detection: port_scan
+  - action: nmap_scan_sweep
+    log_template: "firewall: DENY IN tcp -- {src_ip} {dst_ip} --dport 80 SYN"
+    expected_detection: port_scan
+  - action: nmap_scan_sweep
+    log_template: "firewall: DENY IN tcp -- {src_ip} {dst_ip} --dport 443 SYN"
+    expected_detection: port_scan
+  - action: nmap_scan_sweep
+    log_template: "firewall: DENY IN tcp -- {src_ip} {dst_ip} --dport 3389 SYN"
+    expected_detection: port_scan
+  - action: nmap_scan_sweep
+    log_template: "firewall: DENY IN tcp -- {src_ip} {dst_ip} --dport 445 SYN"
+    expected_detection: port_scan
