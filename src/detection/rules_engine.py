@@ -151,6 +151,8 @@ class RulesEngine:
             return str(log_value) == str(value)
         elif operator == "contains":
             return str(value).lower() in str(log_value).lower()
+        elif operator == "contains_item":
+            return isinstance(log_value, list) and value in log_value
         elif operator == "startswith":
             return str(log_value).lower().startswith(str(value).lower())
         elif operator == "regex":

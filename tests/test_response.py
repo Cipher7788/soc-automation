@@ -163,21 +163,35 @@ class TestResponseActions:
         assert not result.success
 
     def test_block_ip_confirmed_no_firewall_configured(self, response_actions):
-        """Without firewall API configured, action is recorded as success (stub)."""
         result = response_actions.block_ip("5.6.7.8", confirmed=True)
-        # No firewall URL configured, should succeed without making HTTP call
+        assert not result.success
         assert result.action == "block_ip"
         assert result.target == "5.6.7.8"
 
     def test_disable_user_confirmed(self, response_actions):
         result = response_actions.disable_user("testuser", reason="Compromised", confirmed=True)
-        assert result.success
+        assert not result.success
         assert result.action == "disable_user"
 
     def test_collect_forensics_no_wazuh(self, response_actions):
-        result = response_actions.collect_forensics("agent-001", case_id="case-1")
+        result = response_actions.collect_forensics("001", case_id="case-1")
+        assert not result.success
         assert result.action == "collect_forensics"
         assert result.details.get("case_id") == "case-1"
+
+    def test_active_response_requires_one_agent_and_checks_acceptance(self):
+        actions = ResponseActions(wazuh_host="https://wazuh.test", wazuh_token="token")
+        response = MagicMock()
+        response.json.return_value = {"data": {"affected_items": ["001"]}}
+        with patch("requests.put", return_value=response) as put:
+            assert not actions.isolate_host("", confirmed=True).success
+            assert not actions.isolate_host("001,002", confirmed=True).success
+            put.assert_not_called()
+
+            assert actions.isolate_host("001", confirmed=True).success
+            assert put.call_args.kwargs["params"] == {"agents_list": "001"}
+            response.json.return_value = {"data": {"affected_items": [], "total_failed_items": 1}}
+            assert not actions.collect_forensics("001").success
 
     def test_audit_log_records_all_actions(self, response_actions):
         response_actions.block_ip("1.1.1.1", confirmed=False)

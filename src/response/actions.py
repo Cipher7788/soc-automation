@@ -60,15 +60,20 @@ class ResponseActions:
         if not confirmed:
             return self._unconfirmed("block_ip", ip)
 
+        if not self._firewall_api_url:
+            return self._record(ActionResult(
+                action="block_ip", target=ip, success=False,
+                error="Firewall API not configured",
+            ))
+
         try:
-            if self._firewall_api_url:
-                response = requests.post(
-                    f"{self._firewall_api_url}/block",
-                    json={"ip": ip, "reason": reason},
-                    headers={"Authorization": f"Bearer {self._firewall_api_key}"},
-                    timeout=self._timeout,
-                )
-                response.raise_for_status()
+            response = requests.post(
+                f"{self._firewall_api_url}/block",
+                json={"ip": ip, "reason": reason},
+                headers={"Authorization": f"Bearer {self._firewall_api_key}"},
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
             result = ActionResult(
                 action="block_ip",
                 target=ip,
@@ -97,22 +102,36 @@ class ResponseActions:
         if not confirmed:
             return self._unconfirmed("isolate_host", agent_id)
 
+        if not (agent_id.isascii() and agent_id.isdecimal() and len(agent_id) >= 3):
+            return self._record(ActionResult(
+                action="isolate_host", target=agent_id, success=False,
+                error="Expected a single numeric Wazuh agent ID",
+            ))
+        if not self._wazuh_host or not self._wazuh_token:
+            return self._record(ActionResult(
+                action="isolate_host", target=agent_id, success=False,
+                error="Wazuh active response not configured",
+            ))
+
         try:
-            if self._wazuh_host and self._wazuh_token:
-                response = requests.put(
-                    f"{self._wazuh_host}/active-response",
-                    json={"command": "netsh-isolation", "agents_list": [agent_id]},
-                    headers={"Authorization": f"Bearer {self._wazuh_token}"},
-                    timeout=self._timeout,
-                )
-                response.raise_for_status()
+            response = requests.put(
+                f"{self._wazuh_host}/active-response",
+                params={"agents_list": agent_id},
+                json={"command": "netsh-isolation"},
+                headers={"Authorization": f"Bearer {self._wazuh_token}"},
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            outcome = response.json().get("data", {})
+            if outcome.get("total_failed_items") or agent_id not in outcome.get("affected_items", []):
+                raise RuntimeError("Wazuh did not accept the command for the requested agent")
             result = ActionResult(
                 action="isolate_host",
                 target=agent_id,
                 success=True,
                 details={"reason": reason},
             )
-            logger.warning("Host %s isolated via Wazuh active response", agent_id)
+            logger.info("Wazuh accepted the isolation command for agent %s", agent_id)
         except Exception as exc:
             result = ActionResult(
                 action="isolate_host",
@@ -134,15 +153,10 @@ class ResponseActions:
         if not confirmed:
             return self._unconfirmed("disable_user", username)
 
-        # This is a stub — integrate with your identity provider (AD, LDAP, etc.)
-        logger.warning("Disabling user account: %s (%s)", username, reason)
-        result = ActionResult(
-            action="disable_user",
-            target=username,
-            success=True,
-            details={"reason": reason, "note": "stub — integrate with identity provider"},
-        )
-        return self._record(result)
+        return self._record(ActionResult(
+            action="disable_user", target=username, success=False,
+            details={"reason": reason}, error="Identity provider integration unavailable",
+        ))
 
     def collect_forensics(
         self,
@@ -150,19 +164,29 @@ class ResponseActions:
         case_id: str = "",
     ) -> ActionResult:
         """Trigger forensic data collection on a host via Wazuh."""
+        if not (agent_id.isascii() and agent_id.isdecimal() and len(agent_id) >= 3):
+            return self._record(ActionResult(
+                action="collect_forensics", target=agent_id, success=False, details={"case_id": case_id},
+                error="Expected a single numeric Wazuh agent ID",
+            ))
+        if not self._wazuh_host or not self._wazuh_token:
+            return self._record(ActionResult(
+                action="collect_forensics", target=agent_id, success=False,
+                details={"case_id": case_id}, error="Wazuh active response not configured",
+            ))
+
         try:
-            if self._wazuh_host and self._wazuh_token:
-                response = requests.put(
-                    f"{self._wazuh_host}/active-response",
-                    json={
-                        "command": "collect-forensics",
-                        "agents_list": [agent_id],
-                        "arguments": [case_id],
-                    },
-                    headers={"Authorization": f"Bearer {self._wazuh_token}"},
-                    timeout=self._timeout,
-                )
-                response.raise_for_status()
+            response = requests.put(
+                f"{self._wazuh_host}/active-response",
+                params={"agents_list": agent_id},
+                json={"command": "collect-forensics", "arguments": [case_id]},
+                headers={"Authorization": f"Bearer {self._wazuh_token}"},
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            outcome = response.json().get("data", {})
+            if outcome.get("total_failed_items") or agent_id not in outcome.get("affected_items", []):
+                raise RuntimeError("Wazuh did not accept the command for the requested agent")
             result = ActionResult(
                 action="collect_forensics",
                 target=agent_id,

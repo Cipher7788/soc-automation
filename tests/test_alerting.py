@@ -222,13 +222,15 @@ class TestNotifier:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
 
-        with patch("requests.post", return_value=mock_response):
+        description = 'Command "whoami"\nsecond line'
+        with patch("requests.post", return_value=mock_response) as post:
             result = notifier._send_slack({
-                "title": "t", "description": "d", "severity": "critical",
+                "title": "t", "description": description, "severity": "critical",
                 "source": "wazuh", "score": 95.0
             })
 
         assert result is True
+        assert post.call_args.kwargs["json"]["attachments"][0]["text"] == description
 
     def test_send_webhook_success(self):
         notifier = Notifier(webhook_url="http://webhook.test/alert")

@@ -2,7 +2,7 @@
 
 ## `src/ingestion/wazuh_client.WazuhClient`
 
-Wazuh REST API client with JWT authentication and retry logic.
+Wazuh Manager API client with JWT authentication and separate Wazuh Indexer alert search.
 
 ### Constructor
 
@@ -11,8 +11,13 @@ WazuhClient(
     host: str,
     username: str,
     password: str,
-    verify_ssl: bool = False,
+    verify_ssl: bool | str = True,
     timeout: int = 30,
+    *,
+    indexer_url: str = "",
+    indexer_username: str = "",
+    indexer_password: str = "",
+    indexer_verify_ssl: bool | str = True,
 )
 ```
 

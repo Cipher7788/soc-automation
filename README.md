@@ -14,7 +14,7 @@ A comprehensive **Security Operations Center (SOC) automation system** built wit
   │    Wazuh     │  ◄── Log Collection & SIEM / XDR
   │  (SIEM/XDR)  │
   └──────┬──────┘
-         │ Wazuh REST API
+         │ Wazuh Indexer API
          ▼
   ┌─────────────────────────────────────────────────────┐
   │          Python SOC Automation Engine                │
@@ -51,33 +51,33 @@ cp .env.example .env
 # Edit .env with your API keys and endpoints
 ```
 
-### 2. Start the full stack (Docker)
+### 2. Run the engine with Docker Compose
+
+Set `WAZUH_INDEXER_URL` and the indexer credentials in `.env`. Use a URL
+reachable from the container. Wazuh is deployed separately, and TheHive and
+Shuffle are optional external integrations.
 
 ```bash
-docker compose up -d
+docker compose up --build -d
+docker compose logs -f soc-automation
 ```
 
-This starts:
-- Wazuh Manager + Indexer + Dashboard
-- TheHive 5 + Cassandra + MinIO
-- Shuffle SOAR backend + frontend
-- **Grafana** (port 3000) with pre-provisioned SOC dashboard
-- The Python SOC automation engine
+See the [setup guide](docs/setup_guide.md) for private CA certificates and service configuration.
 
 ### 3. Run locally (development)
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+source .venv/bin/activate  # PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install .
 python -m src.main
 ```
 
 ### 4. Run tests
 
 ```bash
-pip install -r requirements.txt
-pytest tests/ -v
+python -m pip install -r requirements.txt
+python -m pytest -q
 ```
 
 ---
@@ -88,6 +88,9 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 
 | Variable | Description |
 |----------|-------------|
+| `WAZUH_INDEXER_URL` | Required Wazuh Indexer base URL |
+| `WAZUH_INDEXER_USERNAME`, `WAZUH_INDEXER_PASSWORD` | Read-only indexer credentials |
+| `WAZUH_INDEXER_CA_BUNDLE` | PEM certificate bundle for a private indexer CA |
 | `WAZUH_HOST` | Wazuh Manager URL (e.g. `https://wazuh-manager:55000`) |
 | `WAZUH_USERNAME` | Wazuh API username |
 | `WAZUH_PASSWORD` | Wazuh API password |
@@ -101,7 +104,6 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 | `SLACK_WEBHOOK_URL` | Slack incoming webhook for notifications |
 | `TEAMS_WEBHOOK_URL` | Microsoft Teams incoming webhook |
 | `SMTP_HOST` | SMTP server for email notifications |
-| `OPENAI_API_KEY` | OpenAI API key (optional, for AI features) |
 | `IOC_DATABASE_PATH` | Path to the local IOC JSON database (default: `data/ioc_database.json`) |
 | `REPORTS_DIR` | Directory to store generated reports (default: `reports`) |
 | `LOG_LEVEL` | Logging level (default: `INFO`) |
@@ -112,7 +114,7 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 ## Module Descriptions
 
 ### `src/ingestion/`
-- **`wazuh_client.py`** — Wazuh REST API client with JWT auth + auto-refresh, retry logic, pagination
+- **`wazuh_client.py`** — Wazuh Indexer alert search and separate Wazuh Manager JWT authentication
 - **`log_collector.py`** — Async multi-source log collector with in-memory buffering
 - **`normalizer.py`** — ECS-compatible log normalizer (IP extraction, timestamp normalization)
 
@@ -154,7 +156,7 @@ All configuration is done via environment variables (copy `.env.example` to `.en
 - See `dashboard/README.md` for setup instructions
 
 ### `playbooks/`
-JSON workflow definitions for Shuffle:
+Workflow design examples for Shuffle:
 - `malware_detected.json` — Enrich → VirusTotal → Create case → Isolate host → Notify
 - `brute_force.json` — Check IP reputation → Block if malicious → Create alert → Notify
 - `suspicious_network.json` — Analyze traffic → Threat intel → Create case → Respond
@@ -183,12 +185,7 @@ Wazuh Alert
     ├─ AI Prioritization (AlertPrioritizer → GradientBoosting)
     ├─ TheHive Case Creation
     ├─ Shuffle Playbook Execution
-    ├─ Automated Incident Response (IncidentResponder)
-    │    ├─ block_ip / add_firewall_rule
-    │    ├─ disable_user
-    │    ├─ kill_process
-    │    ├─ isolate_host (with approval gate)
-    │    └─ forensic_snapshot (with approval gate)
+    ├─ Incident Response (TheHive case creation and action status tracking)
     ├─ Incident Report Generation (HTML/Markdown)
     └─ Notifications (Slack + Teams + Email + Webhook)
 ```
@@ -207,4 +204,4 @@ Wazuh Alert
 
 ## License
 
-MIT
+[MIT](LICENSE)

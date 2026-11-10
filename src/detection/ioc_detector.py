@@ -72,9 +72,9 @@ class IOCDetector:
         malicious_hashes: Optional[set[str]] = None,
         cache_ttl: int = 3600,
     ) -> None:
-        self._malicious_ips: set[str] = malicious_ips or set(_KNOWN_MALICIOUS_IPS)
-        self._malicious_domains: set[str] = malicious_domains or set(_KNOWN_MALICIOUS_DOMAINS)
-        self._malicious_hashes: set[str] = malicious_hashes or set(_KNOWN_MALICIOUS_HASHES)
+        self._malicious_ips: set[str] = set(_KNOWN_MALICIOUS_IPS if malicious_ips is None else malicious_ips)
+        self._malicious_domains: set[str] = set(_KNOWN_MALICIOUS_DOMAINS if malicious_domains is None else malicious_domains)
+        self._malicious_hashes: set[str] = set(_KNOWN_MALICIOUS_HASHES if malicious_hashes is None else malicious_hashes)
         self._cache: dict[str, tuple[list[IOCMatch], float]] = {}
         self._cache_ttl = cache_ttl
 
@@ -124,25 +124,7 @@ class IOCDetector:
                         details={"matched_list": "malicious_ips"},
                     )
                 )
-            elif self._is_suspicious_ip(ip):
-                matches.append(
-                    IOCMatch(
-                        ioc_type="ip",
-                        value=ip,
-                        confidence=0.4,
-                        source="heuristic",
-                    )
-                )
         return matches
-
-    def _is_suspicious_ip(self, ip: str) -> bool:
-        """Heuristic: flag IPs in suspicious ranges (simplified)."""
-        parts = ip.split(".")
-        if len(parts) != 4:
-            return False
-        first = int(parts[0])
-        # RFC 5737 documentation ranges, commonly abused
-        return first in (192, 198, 203)
 
     def _detect_domains(self, text: str) -> list[IOCMatch]:
         matches = []

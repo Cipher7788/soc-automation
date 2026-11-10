@@ -99,7 +99,7 @@ class TeamsNotifier:
             logger.info("Teams alert sent: %s", title)
             return True
         except Exception as exc:
-            logger.error("Failed to send Teams alert: %s", exc)
+            logger.error("Failed to send Teams alert (%s)", type(exc).__name__)
             return False
 
     # ------------------------------------------------------------------

@@ -4,8 +4,8 @@ import asyncio
 import logging
 import signal
 import sys
-import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 from config.logging_config import setup_logging
@@ -14,12 +14,11 @@ from src.ingestion.wazuh_client import WazuhClient
 from src.ingestion.log_collector import LogCollector
 from src.ingestion.normalizer import LogNormalizer
 from src.detection.ioc_detector import IOCDetector
-from src.detection.threat_intel import ThreatIntelManager
 from src.detection.ml_analyzer import MLAnalyzer
 from src.detection.rules_engine import RulesEngine
 from src.detection.mitre_mapper import MITREMapper
 from src.detection.ai_prioritizer import AlertPrioritizer
-from src.alerting.thehive_client import TheHiveClient, HiveAlert, HiveCase
+from src.alerting.thehive_client import TheHiveClient, HiveAlert
 from src.alerting.alert_manager import AlertManager, Alert
 from src.alerting.notifier import Notifier
 from src.alerting.escalation import EscalationManager
@@ -62,7 +61,11 @@ class SOCOrchestrator:
             host=settings.wazuh.host,
             username=settings.wazuh.username,
             password=settings.wazuh.password,
-            verify_ssl=settings.wazuh.verify_ssl,
+            verify_ssl=settings.wazuh.ca_bundle or settings.wazuh.verify_ssl,
+            indexer_url=settings.wazuh.indexer_url,
+            indexer_username=settings.wazuh.indexer_username,
+            indexer_password=settings.wazuh.indexer_password,
+            indexer_verify_ssl=settings.wazuh.indexer_ca_bundle or settings.wazuh.indexer_verify_ssl,
         )
         self.collector = LogCollector(
             wazuh_client=self.wazuh,
@@ -76,12 +79,6 @@ class SOCOrchestrator:
             malicious_ips=self.ioc_database.get_malicious_ips(),
             malicious_domains=self.ioc_database.get_malicious_domains(),
             malicious_hashes=self.ioc_database.get_malware_hashes(),
-        )
-        self.threat_intel = ThreatIntelManager(
-            abuseipdb_key=settings.threat_intel.abuseipdb_api_key,
-            virustotal_key=settings.threat_intel.virustotal_api_key,
-            otx_key=settings.threat_intel.otx_api_key,
-            cache_ttl=settings.threat_intel.cache_ttl,
         )
         self.ml_analyzer = MLAnalyzer(model_path=settings.ml_model_path)
         self.rules_engine = RulesEngine(rules_dir=settings.rules_dir)
@@ -130,8 +127,8 @@ class SOCOrchestrator:
         )
         self.incident_responder = IncidentResponder(
             wazuh_client=self.wazuh,
-            hive_client=self.hive_client,
-            shuffle_client=self.shuffle_client,
+            hive_client=self.hive_client if settings.thehive.api_key else None,
+            require_approval=True,
         )
 
         # --- Reporting ---
@@ -154,6 +151,7 @@ class SOCOrchestrator:
             except Exception as exc:
                 logger.error("Error in main cycle: %s", exc, exc_info=True)
             self.escalation_mgr.check_escalations()
+            self.alert_manager.purge_old()
             await asyncio.sleep(settings.wazuh.poll_interval)
 
     def stop(self) -> None:
@@ -189,9 +187,15 @@ class SOCOrchestrator:
         for norm_log in normalized:
             text = f"{norm_log.raw_message or ''} {norm_log.source_ip or ''} {norm_log.destination_ip or ''}"
             ioc_matches = self.ioc_detector.detect(text)
-            rule_matches = self.rules_engine.evaluate(norm_log.model_dump())
+            rule_matches = self.rules_engine.evaluate({
+                **norm_log.model_dump(),
+                "ioc_types": [match.ioc_type for match in ioc_matches],
+            })
 
-            if not ioc_matches and not rule_matches and not anomaly.is_anomaly:
+            if (
+                not ioc_matches and not rule_matches and not anomaly.is_anomaly
+                and norm_log.severity not in ("high", "critical")
+            ):
                 continue
 
             # 5. Threat intelligence enrichment
@@ -200,7 +204,11 @@ class SOCOrchestrator:
                 {"type": m.ioc_type, "value": m.value, "confidence": m.confidence}
                 for m in ioc_matches
             ]
-            if ioc_data and (settings.threat_intel.virustotal_api_key or settings.threat_intel.abuseipdb_api_key):
+            if ioc_data and any((
+                settings.threat_intel.virustotal_api_key,
+                settings.threat_intel.abuseipdb_api_key,
+                settings.threat_intel.otx_api_key,
+            )):
                 try:
                     enrichment_results = await loop.run_in_executor(
                         None, lambda: self.threat_intel_enricher.enrich_batch(ioc_data)
@@ -209,7 +217,10 @@ class SOCOrchestrator:
                     logger.warning("Threat intel enrichment failed: %s", exc)
 
             # 6. MITRE ATT&CK mapping
-            severity = norm_log.severity or "medium"
+            severity = max(
+                [norm_log.severity or "medium", *(match.severity for match in rule_matches)],
+                key=severity_to_int,
+            )
             alert_title = self._build_title(norm_log, ioc_matches, rule_matches)
             rule_names = [r.rule_name for r in rule_matches]
             tags = list({m.ioc_type for m in ioc_matches} | set(rule_names))
@@ -225,10 +236,12 @@ class SOCOrchestrator:
                 "anomaly_score": anomaly.anomaly_score if anomaly.is_anomaly else 0.0,
                 "process_name_risk": 0.5 if "powershell" in text.lower() else 0.0,
                 "user_privilege": 0.8 if "admin" in text.lower() or "root" in text.lower() else 0.3,
-                "hour_of_day": float(time.localtime().tm_hour),
+                "hour_of_day": float(datetime.fromisoformat(norm_log.timestamp).hour),
                 "log_frequency": 1.0,
             }
             priority_result = self.alert_prioritizer.prioritize(priority_features)
+
+            priority = max((severity, priority_result.priority), key=severity_to_int)
 
             # 8. Build internal alert
             alert = Alert(
@@ -246,29 +259,31 @@ class SOCOrchestrator:
                 continue
 
             # 9. Create TheHive alert
-            await loop.run_in_executor(None, self._create_hive_alert, processed)
+            if settings.thehive.api_key:
+                await loop.run_in_executor(None, self._create_hive_alert, processed)
 
             # 10. Trigger Shuffle playbook
-            await loop.run_in_executor(
-                None,
-                lambda: self.playbook_mgr.execute(alert_type, processed.alert_id, {"severity": severity}),
-            )
+            if settings.shuffle.api_key:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.playbook_mgr.execute(alert_type, processed.alert_id, {"severity": severity}),
+                )
 
             # 11. Automated incident response
             response_actions = []
-            if priority_result.priority in ("high", "critical"):
+            if priority in ("high", "critical"):
                 try:
                     response_actions = await loop.run_in_executor(
                         None,
                         lambda: self.incident_responder.respond(
-                            processed, enrichment_results, priority_result.priority, alert_type
+                            processed, enrichment_results, priority, alert_type
                         ),
                     )
                 except Exception as exc:
                     logger.warning("Incident response failed: %s", exc)
 
             # 12. Generate incident report for high/critical
-            if priority_result.priority in ("high", "critical"):
+            if priority in ("high", "critical"):
                 incident_data = {
                     "incident_id": processed.alert_id[:8].upper(),
                     "attack_type": alert_type.replace("_", " ").title(),
@@ -285,7 +300,7 @@ class SOCOrchestrator:
                         for a in response_actions
                     ],
                     "timeline": [
-                        {"time": norm_log.timestamp.isoformat() if norm_log.timestamp else "", "event": alert_title}
+                        {"time": norm_log.timestamp, "event": alert_title}
                     ],
                 }
                 try:
@@ -300,9 +315,9 @@ class SOCOrchestrator:
             notification_details = {
                 "host": norm_log.agent_name or "",
                 "mitre_technique": ", ".join(mitre_ids) if mitre_ids else "N/A",
-                "response_action": ", ".join(a.action_type for a in response_actions) if response_actions else "None",
+                "response_action": ", ".join(f"{a.action_type} ({a.status})" for a in response_actions) or "None",
                 "iocs": ", ".join(f"{i['type']}:{i['value']}" for i in ioc_data[:3]) if ioc_data else "None",
-                "priority": priority_result.priority,
+                "priority": priority,
             }
             await loop.run_in_executor(
                 None,
@@ -335,7 +350,7 @@ class SOCOrchestrator:
             return rule_matches[0].rule_name
         if ioc_matches:
             return f"IOC Detected: {ioc_matches[0].ioc_type.upper()} — {ioc_matches[0].value}"
-        return f"Security Event: {log.event_type or 'Unknown'}"
+        return log.rule_description or f"Security Event: {log.event_type or 'Unknown'}"
 
     def _build_description(
         self,
@@ -384,14 +399,15 @@ class SOCOrchestrator:
 
     def _create_hive_alert(self, alert: Alert) -> None:
         try:
+            observable_types = {"domain": "fqdn", "md5": "hash", "sha1": "hash", "sha256": "hash", "email": "mail"}
             hive_alert = HiveAlert(
-                title=alert.title,
+                title=truncate(alert.title, 512),
                 description=alert.description,
                 severity=severity_to_int(alert.severity),
                 source_ref=alert.alert_id,
-                tags=alert.tags,
+                tags=list(dict.fromkeys(truncate(tag, 128) for tag in alert.tags if tag)),
                 observables=[
-                    {"dataType": ioc["type"], "data": ioc["value"]}
+                    {"dataType": observable_types.get(ioc["type"], ioc["type"]), "data": ioc["value"]}
                     for ioc in alert.iocs
                 ],
             )
@@ -402,6 +418,8 @@ class SOCOrchestrator:
 
 def main() -> None:
     """Application entry point."""
+    if not settings.wazuh.indexer_url:
+        sys.exit("Set WAZUH_INDEXER_URL to collect Wazuh alerts.")
     orchestrator = SOCOrchestrator()
 
     def _handle_signal(sig: int, frame: Any) -> None:

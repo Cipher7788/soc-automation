@@ -160,7 +160,7 @@ class PlaybookManager:
             try:
                 with open(local_path, encoding="utf-8") as f:
                     data = json.load(f)
-                workflow_id = data.get("id") or data.get("workflow_id")
+                workflow_id = data.get("workflow_id") or data.get("id")
                 if workflow_id:
                     self._workflow_cache[name] = workflow_id
                     return workflow_id

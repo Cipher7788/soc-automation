@@ -42,8 +42,20 @@ class TestIncidentResponder:
 
     def test_block_ip_action_executed_for_brute_force_high(self, responder, sample_alert):
         actions = responder.respond(sample_alert, alert_type="brute_force")
-        action_types = [a.action_type for a in actions]
-        assert "block_ip" in action_types
+        block = next(a for a in actions if a.action_type == "block_ip")
+        assert block.status == "executed"
+        responder._wazuh.block_ip.assert_called_once_with("1.2.3.4")
+
+    def test_unavailable_actions_are_skipped(self, sample_alert):
+        actions = IncidentResponder().respond(sample_alert, alert_type="malware")
+        assert {a.status for a in actions} == {"skipped"}
+
+    def test_failed_block_is_reported_as_failed(self, responder, sample_alert):
+        responder._wazuh.block_ip.side_effect = RuntimeError("block failed")
+        actions = responder.respond(sample_alert, alert_type="brute_force")
+        block = next(a for a in actions if a.action_type == "block_ip")
+        assert block.status == "failed"
+        assert block.result == "block failed"
 
     def test_actions_have_valid_status(self, responder, sample_alert):
         actions = responder.respond(sample_alert, alert_type="brute_force")
@@ -57,10 +69,11 @@ class TestIncidentResponder:
 
     def test_approval_required_actions_skipped_when_flag_set(self, sample_alert):
         responder = IncidentResponder(require_approval=True)
+        sample_alert.severity = "critical"
         actions = responder.respond(sample_alert, alert_type="malware", priority="critical")
-        for action in actions:
-            if action.requires_approval:
-                assert action.status == "skipped"
+        gated = [action for action in actions if action.requires_approval]
+        assert gated
+        assert all(action.result == "approval_required" for action in gated)
 
     def test_default_alert_type_produces_fallback_actions(self, responder, sample_alert):
         sample_alert.severity = "high"

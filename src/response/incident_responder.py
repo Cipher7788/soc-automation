@@ -5,6 +5,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from src.alerting.thehive_client import HiveCase
+from src.utils.helpers import severity_to_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,73 +131,45 @@ class IncidentResponder:
             action.result = "approval_required"
             return
 
-        action.executed_at = time.time()
         try:
             handler = getattr(self, f"_action_{action.action_type}", None)
-            if handler:
-                action.result = handler(action, alert)
-                action.status = "executed"
-            else:
-                logger.warning("No handler for action type: %s", action.action_type)
+            if handler is None:
                 action.status = "skipped"
+                action.result = "handled by notification channels" if action.action_type == "notify_soc" else "action not implemented"
+                return
+            handler(action, alert)
         except Exception as exc:
             logger.error("Response action %s failed: %s", action.action_type, exc)
             action.status = "failed"
             action.result = str(exc)
 
-    # ------------------------------------------------------------------
-    # Action handlers
-    # ------------------------------------------------------------------
+    def _action_block_ip(self, action: ResponseAction, alert: Any) -> None:
+        block_ip = getattr(self._wazuh, "block_ip", None)
+        if not callable(block_ip) or action.target == "unknown":
+            action.status = "skipped"
+            action.result = "block IP integration or target unavailable"
+            return
+        action.executed_at = time.time()
+        block_ip(action.target)
+        action.result = f"IP {action.target} blocked"
+        action.status = "executed"
 
-    def _action_block_ip(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Blocking IP %s", action.target)
-        if self._wazuh:
-            try:
-                self._wazuh.block_ip(action.target)
-            except Exception as exc:
-                logger.warning("Wazuh block_ip failed: %s", exc)
-        return f"IP {action.target} blocked"
+    def _action_create_case(self, action: ResponseAction, alert: Any) -> None:
+        if self._hive is None:
+            action.status = "skipped"
+            action.result = "TheHive not configured"
+            return
 
-    def _action_disable_user(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Disabling user %s", action.target)
-        return f"User {action.target} disabled"
-
-    def _action_kill_process(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Killing process on %s", action.target)
-        return f"Process killed on {action.target}"
-
-    def _action_add_firewall_rule(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Adding firewall rule targeting %s", action.target)
-        return f"Firewall rule added for {action.target}"
-
-    def _action_isolate_host(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Isolating host %s", action.target)
-        return f"Host {action.target} isolated"
-
-    def _action_forensic_snapshot(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Creating forensic snapshot of %s", action.target)
-        return f"Forensic snapshot created for {action.target}"
-
-    def _action_create_case(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Creating TheHive case for alert %s", getattr(alert, "alert_id", "unknown"))
-        if self._hive:
-            try:
-                from src.alerting.thehive_client import HiveCase
-                case = HiveCase(
-                    title=getattr(alert, "title", "Security Incident"),
-                    description=getattr(alert, "description", ""),
-                    severity=2,
-                    tags=getattr(alert, "tags", []),
-                )
-                result = self._hive.create_case(case)
-                return f"Case created: {result.get('id', 'unknown')}"
-            except Exception as exc:
-                logger.warning("TheHive create_case failed: %s", exc)
-        return "Case creation logged (no TheHive client)"
-
-    def _action_notify_soc(self, action: ResponseAction, alert: Any) -> str:
-        logger.info("RESPONSE: Notifying SOC team for alert %s", getattr(alert, "alert_id", "unknown"))
-        return "SOC notification sent"
+        case = HiveCase(
+            title=getattr(alert, "title", "Security Incident"),
+            description=getattr(alert, "description", ""),
+            severity=severity_to_int(getattr(alert, "severity", "medium")),
+            tags=getattr(alert, "tags", []),
+        )
+        action.executed_at = time.time()
+        result = self._hive.create_case(case)
+        action.result = f"Case created: {result.get('_id') or result.get('id', 'unknown')}"
+        action.status = "executed"
 
     # ------------------------------------------------------------------
     # Helpers

@@ -4,13 +4,9 @@ This directory contains Grafana provisioning configuration and pre-built dashboa
 
 ## Quick Start
 
-The Grafana service is defined in `docker-compose.yml` and will start automatically alongside the rest of the SOC stack:
-
-```bash
-docker compose up -d grafana
-```
-
-Grafana will be available at **http://localhost:3000** (default credentials: `admin` / `admin`).
+Install Grafana and its OpenSearch datasource plugin separately. Mount the
+provisioning and dashboard directories into Grafana, or import the dashboard
+and configure its datasource in the Grafana UI.
 
 ## Directory Structure
 
@@ -44,9 +40,10 @@ The **SOC Overview** dashboard (`soc_overview.json`) includes:
 
 ## Datasource
 
-The dashboard uses a provisioned **OpenSearch** datasource (`Wazuh-OpenSearch`) that points to the Wazuh Indexer at `https://wazuh-indexer:9200`.
-
-If you run Wazuh with a custom password, set `INDEXER_PASSWORD` in your `.env` file.
+Set `WAZUH_INDEXER_URL`, `WAZUH_INDEXER_USERNAME`, and
+`WAZUH_INDEXER_PASSWORD` in the Grafana process environment for provisioning.
+Use a read-only account and add the indexer's CA to Grafana's trust store
+when using a private certificate authority.
 
 ## Adding Custom Panels
 

@@ -5,8 +5,9 @@ rules:
     severity: "high"
     logic: "AND"
     conditions:
-      - field: "source_ip"
-        operator: "exists"
+      - field: "ioc_types"
+        operator: "contains_item"
+        value: "ip"
     tags:
       - "ioc"
       - "ip"
@@ -37,8 +38,9 @@ rules:
       - field: "event_type"
         operator: "contains"
         value: "dns"
-      - field: "rule_description"
-        operator: "exists"
+      - field: "ioc_types"
+        operator: "contains_item"
+        value: "domain"
     tags:
       - "dns"
       - "domain"

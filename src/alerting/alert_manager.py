@@ -102,6 +102,12 @@ class AlertManager:
         old_ids = [aid for aid, a in self._alerts.items() if a.timestamp < cutoff]
         for aid in old_ids:
             del self._alerts[aid]
+        if old_ids:
+            active_groups = [
+                [alert_id for alert_id in group if alert_id in self._alerts]
+                for group in self._incident_groups
+            ]
+            self._incident_groups = [group for group in active_groups if group]
         # Clean seen fingerprints
         old_fp = [fp for fp, ts in self._seen.items() if ts < cutoff]
         for fp in old_fp:
@@ -114,7 +120,11 @@ class AlertManager:
 
     def _fingerprint(self, alert: Alert) -> str:
         """Generate a content-based fingerprint for deduplication."""
-        key = f"{alert.title}|{alert.source}|{alert.severity}"
+        key = "|".join((
+            alert.title, alert.source, alert.severity,
+            str(alert.raw_data.get("agent_id") or alert.raw_data.get("hostname") or ""),
+            str(alert.raw_data.get("source_ip") or ""),
+        ))
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
     def _is_duplicate(self, fingerprint: str) -> bool:

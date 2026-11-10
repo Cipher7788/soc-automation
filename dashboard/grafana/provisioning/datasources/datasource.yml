@@ -4,18 +4,18 @@ datasources:
   - name: Wazuh-OpenSearch
     type: grafana-opensearch-datasource
     access: proxy
-    url: https://wazuh-indexer:9200
+    url: $WAZUH_INDEXER_URL
     basicAuth: true
-    basicAuthUser: admin
+    basicAuthUser: $WAZUH_INDEXER_USERNAME
     jsonData:
       database: wazuh-alerts-*
       timeField: timestamp
       version: "2.x"
       flavor: opensearch
-      logMessageField: full_log
+      logMessageField: fullLog
       logLevelField: rule.level
-      tlsSkipVerify: true
+      tlsSkipVerify: false
     secureJsonData:
-      basicAuthPassword: "${INDEXER_PASSWORD:-changeme}"
+      basicAuthPassword: $WAZUH_INDEXER_PASSWORD
     isDefault: true
     editable: true

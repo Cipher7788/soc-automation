@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(".env")
 
 
 def _env(key: str, default: str = "") -> str:
@@ -25,22 +25,28 @@ def _env_bool(key: str, default: bool = False) -> bool:
 
 @dataclass
 class WazuhConfig:
-    host: str = field(default_factory=lambda: _env("WAZUH_HOST", "https://wazuh-manager:55000"))
+    host: str = field(default_factory=lambda: _env("WAZUH_HOST", "https://localhost:55000"))
     username: str = field(default_factory=lambda: _env("WAZUH_USERNAME", "wazuh-wui"))
     password: str = field(default_factory=lambda: _env("WAZUH_PASSWORD", ""))
-    verify_ssl: bool = field(default_factory=lambda: _env_bool("WAZUH_VERIFY_SSL", False))
+    verify_ssl: bool = field(default_factory=lambda: _env_bool("WAZUH_VERIFY_SSL", True))
+    ca_bundle: str = field(default_factory=lambda: _env("WAZUH_CA_BUNDLE"))
+    indexer_url: str = field(default_factory=lambda: _env("WAZUH_INDEXER_URL"))
+    indexer_username: str = field(default_factory=lambda: _env("WAZUH_INDEXER_USERNAME"))
+    indexer_password: str = field(default_factory=lambda: _env("WAZUH_INDEXER_PASSWORD"))
+    indexer_ca_bundle: str = field(default_factory=lambda: _env("WAZUH_INDEXER_CA_BUNDLE"))
+    indexer_verify_ssl: bool = field(default_factory=lambda: _env_bool("WAZUH_INDEXER_VERIFY_SSL", True))
     poll_interval: int = field(default_factory=lambda: _env_int("WAZUH_POLL_INTERVAL", 60))
 
 
 @dataclass
 class TheHiveConfig:
-    url: str = field(default_factory=lambda: _env("THEHIVE_URL", "http://thehive:9000"))
+    url: str = field(default_factory=lambda: _env("THEHIVE_URL", "http://localhost:9000"))
     api_key: str = field(default_factory=lambda: _env("THEHIVE_API_KEY", ""))
 
 
 @dataclass
 class ShuffleConfig:
-    url: str = field(default_factory=lambda: _env("SHUFFLE_URL", "http://shuffle-backend:3001"))
+    url: str = field(default_factory=lambda: _env("SHUFFLE_URL", "http://localhost:5001"))
     api_key: str = field(default_factory=lambda: _env("SHUFFLE_API_KEY", ""))
 
 
@@ -75,7 +81,6 @@ class AppConfig:
     playbooks_dir: str = field(default_factory=lambda: _env("PLAYBOOKS_DIR", "playbooks"))
     ioc_database_path: str = field(default_factory=lambda: _env("IOC_DATABASE_PATH", "data/ioc_database.json"))
     reports_dir: str = field(default_factory=lambda: _env("REPORTS_DIR", "reports"))
-    openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY", ""))
     wazuh: WazuhConfig = field(default_factory=WazuhConfig)
     thehive: TheHiveConfig = field(default_factory=TheHiveConfig)
     shuffle: ShuffleConfig = field(default_factory=ShuffleConfig)

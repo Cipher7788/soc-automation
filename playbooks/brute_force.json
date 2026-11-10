@@ -1,6 +1,4 @@
 {
-  "id": "brute-force-wf-001",
-  "workflow_id": "brute-force-wf-001",
   "name": "brute_force",
   "description": "Automated response to brute force / multiple failed login attempts",
   "trigger": {

@@ -1,115 +1,60 @@
 # Setup Guide
 
-## Prerequisites
+## Wazuh
 
-- **Docker** 24.x+ and **Docker Compose** v2+
-- **Python** 3.11+ (for local development)
-- API keys for: AbuseIPDB, VirusTotal, AlienVault OTX (optional but recommended)
-
----
-
-## Step 1 — Clone the Repository
+Deploy Wazuh using its [installation guide](https://documentation.wazuh.com/current/installation-guide/index.html).
+Confirm a connected agent has produced alerts in the `wazuh-alerts-*` indices.
+Create an indexer account with read access to those indices and permission to search and scroll.
 
 ```bash
 git clone https://github.com/Cipher7788/soc-automation.git
 cd soc-automation
-```
-
----
-
-## Step 2 — Configure Environment Variables
-
-```bash
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Set `WAZUH_INDEXER_URL` to the indexer base URL, such as
+`https://wazuh.example.net:9200`. Set `WAZUH_INDEXER_USERNAME` and
+`WAZUH_INDEXER_PASSWORD` to the indexer credentials. With a private CA, set
+`WAZUH_INDEXER_CA_BUNDLE` to a readable PEM file. For Compose, put the PEM file
+under `certs/` and use its container path, such as `/app/certs/indexer-ca.pem`.
+Use a URL hostname that matches the TLS certificate.
 
-| Key | Where to obtain |
-|-----|----------------|
-| `WAZUH_PASSWORD` | Set during Wazuh install or via dashboard |
-| `THEHIVE_API_KEY` | TheHive → Settings → API Keys |
-| `SHUFFLE_API_KEY` | Shuffle → Profile → API Key |
-| `ABUSEIPDB_API_KEY` | https://www.abuseipdb.com/account/api |
-| `VIRUSTOTAL_API_KEY` | https://www.virustotal.com/gui/user/apikey |
-| `OTX_API_KEY` | https://otx.alienvault.com/api |
-| `SLACK_WEBHOOK_URL` | Slack App → Incoming Webhooks |
-| `SMTP_*` | Your SMTP provider |
-
----
-
-## Step 3 — Start the Full Stack
+## Run the engine
 
 ```bash
-docker compose up -d
-```
-
-Wait ~2-3 minutes for all services to initialise. Monitor with:
-
-```bash
+docker compose up --build -d
 docker compose logs -f soc-automation
 ```
 
----
+The engine uses external services. If a service runs on the Docker host, use
+`host.docker.internal` where that name matches the service certificate.
+For local development, use Python 3.11 or later and run `python -m pip install .`
+then `python -m src.main` from the repository root.
 
-## Step 4 — Verify Services
+Reports and models are stored in Compose named volumes. Copy reports out with
+`docker compose cp soc-automation:/app/reports ./reports`. If upgrading from
+the original bind mounts, keep your existing local reports and copy any model
+you want to reuse into the new model volume. Load only trusted pickle models
+and retrain if a scikit-learn upgrade makes them incompatible.
 
-| Service | URL | Default Credentials |
-|---------|-----|---------------------|
-| Wazuh Dashboard | https://localhost:443 | admin / changeme |
-| TheHive | http://localhost:9000 | admin@thehive.local / secret |
-| Shuffle | http://localhost:3001 | (register on first visit) |
-| Wazuh API | https://localhost:55000 | wazuh-wui / changeme |
+Alert collection searches a rolling 60-minute window and deduplicates in
+memory. Restarting the process can replay recent alerts, and an outage longer
+than the window can leave gaps.
 
----
+## Optional services
 
-## Step 5 — Configure Wazuh Agents
+- Set `THEHIVE_URL` and `THEHIVE_API_KEY` to enable TheHive alert and case creation.
+- Set `SHUFFLE_URL` to the backend API (typically port 5001) and set
+  `SHUFFLE_API_KEY`. Create workflows using the JSON playbook files as design
+  examples, then match their names or add the deployed workflow ID as
+  `workflow_id` in the corresponding JSON file. High-impact workflows wait
+  for in-process approval.
+- Set the individual threat intelligence keys and notification endpoints to
+  enable those integrations. Each enabled provider receives the indicators
+  or alert details needed for its function.
+- Grafana provisioning examples live under `dashboard/grafana`. Configure
+  the datasource for your own indexer deployment.
 
-On each endpoint to monitor, install the Wazuh agent and register it with your Wazuh Manager:
-
-```bash
-# On Linux endpoints
-curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | apt-key add -
-# ... (see Wazuh official docs for full installation)
-WAZUH_MANAGER=<your-wazuh-ip> agent-auth -m <your-wazuh-ip>
-systemctl start wazuh-agent
-```
-
----
-
-## Step 6 — Configure TheHive
-
-1. Log in to TheHive at http://localhost:9000
-2. Create an organisation and a user account
-3. Generate an API key: **Settings → API Keys → Create**
-4. Update `THEHIVE_API_KEY` in `.env`
-
----
-
-## Step 7 — Configure Shuffle
-
-1. Visit http://localhost:3001 and register
-2. Note your API key from your profile settings
-3. Update `SHUFFLE_API_KEY` in `.env`
-4. Import the playbooks from the `playbooks/` directory
-
----
-
-## Troubleshooting
-
-### Container fails to start
-```bash
-docker compose logs <service-name>
-```
-
-### Wazuh authentication fails
-- Ensure `WAZUH_USERNAME` and `WAZUH_PASSWORD` match the values set in your Wazuh deployment
-- Check SSL: set `WAZUH_VERIFY_SSL=false` for self-signed certificates
-
-### TheHive returns 401
-- Regenerate the API key in TheHive and update `.env`
-
-### No alerts appearing
-- Verify Wazuh agents are connected: Wazuh Dashboard → Agents
-- Check poll interval: `WAZUH_POLL_INTERVAL` (default 60 seconds)
-- Inspect logs: `docker compose logs soc-automation`
+The built-in responder can create TheHive cases. Host isolation, account
+changes, forensic snapshots, and firewall changes need deployed integrations.
+Skipped or failed actions are recorded with their actual status.

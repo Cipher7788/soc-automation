@@ -71,21 +71,14 @@ def _parse_timestamp(raw: Any) -> str:
         return datetime.now(timezone.utc).isoformat()
     if isinstance(raw, (int, float)):
         return datetime.fromtimestamp(raw, tz=timezone.utc).isoformat()
-    ts_str = str(raw)
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-    ):
-        try:
-            dt = datetime.strptime(ts_str, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.isoformat()
-        except ValueError:
-            continue
-    return datetime.now(timezone.utc).isoformat()
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return datetime.now(timezone.utc).isoformat()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
 
 
 class LogNormalizer:
@@ -126,11 +119,11 @@ class LogNormalizer:
             hostname=raw.get("hostname") or agent.get("name"),
             user=data.get("srcuser") or data.get("user"),
             process=data.get("process"),
-            raw_message=raw.get("full_log") or raw.get("message"),
+            raw_message=raw.get("full_log") or raw.get("fullLog") or raw.get("message"),
             source=source,
             extra={k: v for k, v in raw.items() if k not in {
                 "timestamp", "rule", "agent", "data", "network",
-                "decoder", "type", "full_log", "message", "hostname",
+                "decoder", "type", "full_log", "fullLog", "message", "hostname",
             }},
         )
 

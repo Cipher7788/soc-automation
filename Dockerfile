@@ -1,28 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
+COPY pyproject.toml LICENSE ./
+COPY config ./config
+COPY src ./src
+RUN python -m pip install --no-cache-dir . \
+    && useradd --create-home --uid 10001 socuser \
+    && mkdir -p models reports \
+    && chown socuser:socuser models reports
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
+COPY rules ./rules
+COPY playbooks ./playbooks
+COPY data ./data
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Create models directory for ML model persistence
-RUN mkdir -p models
-
-# Create non-root user for security
-RUN useradd -m -u 1000 socuser && chown -R socuser:socuser /app
 USER socuser
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
-
-CMD ["python", "-m", "src.main"]
+CMD ["soc-automation"]

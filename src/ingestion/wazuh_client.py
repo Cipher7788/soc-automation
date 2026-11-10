@@ -1,7 +1,6 @@
 """Wazuh API client for log ingestion."""
 
 import logging
-import time
 from typing import Any, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -28,8 +27,13 @@ class WazuhClient:
         host: str,
         username: str,
         password: str,
-        verify_ssl: bool = False,
+        verify_ssl: bool | str = True,
         timeout: int = 30,
+        *,
+        indexer_url: str = "",
+        indexer_username: str = "",
+        indexer_password: str = "",
+        indexer_verify_ssl: bool | str = True,
     ) -> None:
         self.host = host.rstrip("/")
         self.username = username
@@ -38,9 +42,13 @@ class WazuhClient:
         self.timeout = timeout
         self._token: Optional[str] = None
         self._token_expiry: Optional[datetime] = None
-        self._session = self._build_session()
+        self._session = self._build_session(verify_ssl)
+        self._indexer_url = indexer_url.rstrip("/")
+        self._indexer = self._build_session(indexer_verify_ssl)
+        if indexer_username:
+            self._indexer.auth = (indexer_username, indexer_password)
 
-    def _build_session(self) -> requests.Session:
+    def _build_session(self, verify_ssl: bool | str) -> requests.Session:
         session = requests.Session()
         retry = Retry(
             total=3,
@@ -50,7 +58,7 @@ class WazuhClient:
         adapter = HTTPAdapter(max_retries=retry)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
-        session.verify = self.verify_ssl
+        session.verify = verify_ssl
         return session
 
     def authenticate(self) -> str:
@@ -114,16 +122,47 @@ class WazuhClient:
         return results
 
     def get_alerts(self, time_range: int = 60) -> list[dict[str, Any]]:
-        """Fetch alerts from Wazuh within the last *time_range* minutes."""
-        since = (datetime.now(timezone.utc) - timedelta(minutes=time_range)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        params = {
-            "q": f"timestamp>{since}",
-            "sort": "-timestamp",
-        }
-        logger.debug("Fetching Wazuh alerts since %s", since)
-        return self._paginate("/alerts", params)
+        """Read a complete snapshot of recent alerts from the Wazuh Indexer."""
+        if not self._indexer_url:
+            raise ValueError("Set WAZUH_INDEXER_URL to collect Wazuh alerts")
+
+        since = (datetime.now(timezone.utc) - timedelta(minutes=time_range)).isoformat()
+        scroll_url = f"{self._indexer_url}/_search/scroll"
+        scroll_id = None
+        alerts = []
+        try:
+            response = self._indexer.post(
+                f"{self._indexer_url}/wazuh-alerts-*/_search",
+                params={"scroll": "1m", "allow_no_indices": "true", "allow_partial_search_results": "false"},
+                json={"size": 500, "sort": ["_doc"], "query": {"range": {"timestamp": {"gte": since}}}},
+                timeout=self.timeout,
+            )
+            while True:
+                response.raise_for_status()
+                page = response.json()
+                scroll_id = page.get("_scroll_id", scroll_id)
+                if page.get("timed_out") or page.get("_shards", {}).get("failed"):
+                    raise RuntimeError("Wazuh Indexer returned incomplete search results")
+                hits = page["hits"]["hits"]
+                if not hits:
+                    return alerts
+                if not scroll_id:
+                    raise RuntimeError("Wazuh Indexer did not return a scroll ID")
+                alerts.extend(
+                    {**hit["_source"], "_wazuh_document_id": (hit["_index"], hit["_id"])}
+                    for hit in hits
+                )
+                response = self._indexer.post(
+                    scroll_url, json={"scroll": "1m", "scroll_id": scroll_id}, timeout=self.timeout,
+                )
+        finally:
+            if scroll_id:
+                try:
+                    self._indexer.delete(
+                        scroll_url, json={"scroll_id": [scroll_id]}, timeout=self.timeout,
+                    ).raise_for_status()
+                except requests.RequestException:
+                    logger.warning("Could not clear Wazuh Indexer scroll; it will expire")
 
     def get_agents(self) -> list[dict[str, Any]]:
         """Fetch all registered Wazuh agents."""

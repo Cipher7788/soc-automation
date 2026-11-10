@@ -25,7 +25,7 @@ The SOC Automation System is a Python-based security operations platform that in
          │
          ▼ REST API (JWT)
     [log_collector.py]
-    - Polls /alerts every N seconds
+    - Searches wazuh-alerts-* on the Wazuh Indexer
     - Buffers in memory
          │
          ▼
@@ -69,7 +69,7 @@ The SOC Automation System is a Python-based security operations platform that in
 
 ### Wazuh Integration (`src/ingestion/`)
 
-The `WazuhClient` authenticates via JWT and polls the `/alerts` endpoint with time-range filtering. Retry logic (exponential backoff) handles transient failures. Pagination handles large alert volumes.
+The `WazuhClient` searches the Wazuh Indexer over a rolling time window and scrolls through the results. The collector drains batches and suppresses repeated document IDs in memory. Separate Manager API operations authenticate with a JWT.
 
 The `LogNormalizer` maps Wazuh's JSON alert format to an ECS-inspired `NormalizedLog` schema that downstream components can rely upon regardless of source.
 
@@ -85,7 +85,7 @@ The `LogNormalizer` maps Wazuh's JSON alert format to an ECS-inspired `Normalize
 
 ### Alerting (`src/alerting/`)
 
-**Alert Manager** — Fingerprints alerts by title + source + severity. Duplicates within the dedup window (default 5 minutes) are suppressed. Related alerts sharing keywords or IOC values are grouped into correlated incidents.
+**Alert Manager** — Fingerprints alerts by title, source, severity, agent, and source IP. Duplicates within the dedup window (default 5 minutes) are suppressed. Related alerts sharing keywords or IOC values are grouped into correlated incidents.
 
 **TheHive Client** — Creates structured alerts and cases via TheHive v5 REST API. Observables (IPs, hashes, domains) are attached automatically from IOC matches.
 

@@ -1,6 +1,4 @@
 {
-  "id": "suspicious-network-wf-001",
-  "workflow_id": "suspicious-network-wf-001",
   "name": "suspicious_network",
   "description": "Automated response to suspicious network activity / unusual traffic patterns",
   "trigger": {

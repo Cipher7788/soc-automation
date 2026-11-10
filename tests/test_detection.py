@@ -45,6 +45,10 @@ class TestIOCDetector:
         # 10.0.0.1 is not in blocklist; google.com is not malicious
         assert not any(m.confidence > 0.9 for m in matches)
 
+    def test_unlisted_ips_do_not_trigger_iocs(self):
+        detector = IOCDetector(malicious_ips=set())
+        assert detector.detect("192.168.1.100 198.51.100.1 203.0.113.5") == []
+
     def test_confidence_scores_are_valid(self, ioc_detector):
         matches = ioc_detector.detect("Connection to 198.51.100.1")
         for m in matches:
@@ -175,6 +179,17 @@ class TestMLAnalyzer:
 # ─── RulesEngine Tests ────────────────────────────────────────────────────────
 
 class TestRulesEngine:
+    def test_shipped_ioc_rules_require_a_match(self):
+        engine = RulesEngine()
+        event = {
+            "source_ip": "192.168.1.5",
+            "event_type": "dns",
+            "rule_description": "DNS lookup",
+        }
+        assert engine.evaluate(event) == []
+        matches = engine.evaluate({**event, "ioc_types": ["ip", "domain"]})
+        assert {match.rule_id for match in matches} == {"IOC-001", "IOC-003"}
+
     def test_load_rules(self, rules_engine):
         assert len(rules_engine._rules) == 2
 

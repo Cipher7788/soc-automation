@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soc-automation"
+version = "1.0.0"
+description = "SOC automation with Wazuh, TheHive, and Shuffle"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "requests>=2.32.4,<3",
+    "urllib3>=2.6.3,<3",
+    "python-dotenv>=1.2.1,<2",
+    "PyYAML>=6.0.2,<7",
+    "scikit-learn>=1.6.1,<2",
+    "numpy>=1.26.4,<3",
+    "Jinja2>=3.1.6,<4",
+    "pydantic>=2.10,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=1.0,<2",
+    "pytest-mock>=3.14,<4",
+]
+
+[project.scripts]
+soc-automation = "src.main:main"
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*", "config"]
+
+[tool.setuptools.package-data]
+"src.reporting" = ["templates/*.html", "templates/*.md"]
+"src.simulation" = ["scenarios/*.yml"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = 'function'

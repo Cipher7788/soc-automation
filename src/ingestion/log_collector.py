@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.ingestion.wazuh_client import WazuhClient
 
@@ -30,7 +30,8 @@ class LogCollector:
         self._poll_interval = poll_interval
         self._batch_size = batch_size
         self._time_range = time_range
-        self._buffer: deque[dict[str, Any]] = deque(maxlen=batch_size * 10)
+        self._buffer: deque[dict[str, Any]] = deque()
+        self._seen: dict[tuple[str, str] | str, float] = {}
         self._running = False
         self._callbacks: list[Callable[[list[dict[str, Any]]], None]] = []
 
@@ -55,13 +56,21 @@ class LogCollector:
                 logger.error("Callback error: %s", exc)
 
     def collect_once(self) -> list[dict[str, Any]]:
-        """Perform a single collection cycle and return all logs."""
-        logs = self._collect_wazuh()
-        for log in logs:
-            log["_source"] = "wazuh"
-            self._buffer.append(log)
+        """Return the next batch, fetching alerts when the queue is empty."""
+        if not self._buffer:
+            now = time.monotonic()
+            self._seen = {key: expiry for key, expiry in self._seen.items() if expiry > now}
+            expiry = now + self._time_range * 60 + self._poll_interval
+            for log in self._collect_wazuh():
+                key = log.get("_wazuh_document_id") or log.get("id")
+                if key:
+                    already_seen = key in self._seen
+                    self._seen[key] = expiry
+                    if already_seen:
+                        continue
+                self._buffer.append({**log, "_source": "wazuh"})
 
-        batch = list(self._buffer)[: self._batch_size]
+        batch = [self._buffer.popleft() for _ in range(min(len(self._buffer), self._batch_size))]
         if batch:
             self._dispatch(batch)
         return batch

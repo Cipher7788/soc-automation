@@ -1,7 +1,7 @@
 """Tests for the log ingestion module."""
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 
 from src.ingestion.wazuh_client import WazuhClient, WazuhAuthError
@@ -34,24 +34,34 @@ class TestWazuhClient:
             with pytest.raises(WazuhAuthError):
                 client.authenticate()
 
-    def test_get_alerts_calls_paginate(self):
-        client = WazuhClient("https://wazuh:55000", "user", "pass", verify_ssl=False)
-        client._token = "jwt"
-        client._token_expiry = datetime(9999, 1, 1, tzinfo=timezone.utc)
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": {
-                "affected_items": [{"id": "1"}, {"id": "2"}],
-                "total_affected_items": 2,
-            }
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch.object(client._session, "get", return_value=mock_response):
+    def test_get_alerts_scrolls_and_clears_search(self):
+        client = WazuhClient(
+            "https://wazuh:55000", "manager-user", "manager-pass",
+            indexer_url="https://indexer:9200",
+            indexer_username="reader", indexer_password="secret",
+            indexer_verify_ssl="indexer-ca.pem",
+        )
+        pages = [
+            {"_scroll_id": "initial", "hits": {"hits": [
+                {"_index": "wazuh-alerts-1", "_id": "1", "_source": {"rule": {"id": "101"}}},
+            ]}},
+            {"_scroll_id": "final", "hits": {"hits": []}},
+        ]
+        responses = [MagicMock(json=MagicMock(return_value=page)) for page in pages]
+        with (
+            patch.object(client._indexer, "post", side_effect=responses) as post,
+            patch.object(client._indexer, "delete") as delete,
+            patch.object(client._session, "get") as manager_get,
+        ):
             alerts = client.get_alerts(time_range=60)
 
-        assert len(alerts) == 2
+        assert alerts == [{"rule": {"id": "101"}, "_wazuh_document_id": ("wazuh-alerts-1", "1")}]
+        assert client._indexer.auth == ("reader", "secret")
+        assert client._indexer.verify == "indexer-ca.pem"
+        assert post.call_args_list[0].args[0] == "https://indexer:9200/wazuh-alerts-*/_search"
+        assert post.call_args_list[1].kwargs["json"]["scroll_id"] == "initial"
+        assert delete.call_args.kwargs["json"] == {"scroll_id": ["final"]}
+        manager_get.assert_not_called()
 
     def test_get_agents(self):
         client = WazuhClient("https://wazuh:55000", "user", "pass", verify_ssl=False)
@@ -91,7 +101,7 @@ class TestWazuhClient:
         data_response.raise_for_status = MagicMock()
 
         with patch.object(client._session, "get", side_effect=[auth_response, data_response]):
-            client.get_alerts()
+            client.get_agents()
 
         assert client._token == "new-token"
 
@@ -127,14 +137,32 @@ class TestLogCollector:
 
         assert len(received) == 1
 
-    def test_flush_buffer(self, wazuh_client, sample_wazuh_alert):
-        wazuh_client.get_alerts.return_value = [sample_wazuh_alert]
-        collector = LogCollector(wazuh_client=wazuh_client)
-        collector.collect_once()
+    def test_flush_buffer(self, wazuh_client):
+        wazuh_client.get_alerts.return_value = [{"id": "1"}, {"id": "2"}]
+        collector = LogCollector(wazuh_client=wazuh_client, batch_size=1)
+        assert collector.collect_once()[0]["id"] == "1"
 
         items = collector.flush_buffer()
-        assert len(items) == 1
+        assert [item["id"] for item in items] == ["2"]
         assert collector.flush_buffer() == []
+
+    def test_collect_once_drains_batches_and_skips_seen_alerts(self, wazuh_client):
+        wazuh_client.get_alerts.side_effect = [
+            [{"id": "1"}, {"id": "2"}],
+            [{"id": "1"}, {"id": "2"}, {"id": "3"}],
+        ]
+        collector = LogCollector(wazuh_client=wazuh_client, batch_size=1)
+
+        assert [collector.collect_once()[0]["id"] for _ in range(3)] == ["1", "2", "3"]
+        assert wazuh_client.get_alerts.call_count == 2
+
+    def test_wazuh_indexed_fields(self):
+        result = LogNormalizer().normalize({
+            "timestamp": "2024-06-15T19:00:00.000+0530",
+            "fullLog": "Suspicious login",
+        }, source="wazuh")
+        assert result.timestamp == "2024-06-15T13:30:00+00:00"
+        assert result.raw_message == "Suspicious login"
 
     def test_stop_sets_running_false(self, wazuh_client):
         collector = LogCollector(wazuh_client=wazuh_client)

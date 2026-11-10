@@ -1,8 +1,8 @@
 """Multi-channel notification system (email, Slack, webhook)."""
 
-import json
 import logging
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Optional
@@ -25,21 +25,7 @@ _EMAIL_TEMPLATE = """
 </body></html>
 """
 
-_SLACK_TEMPLATE = """{
-  "text": ":rotating_light: *SOC Alert — {{ severity | upper }}*",
-  "attachments": [{
-    "color": "{% if severity == 'critical' %}danger{% elif severity == 'high' %}warning{% else %}good{% endif %}",
-    "title": "{{ title }}",
-    "text": "{{ description | truncate(200) }}",
-    "fields": [
-      {"title": "Severity", "value": "{{ severity }}", "short": true},
-      {"title": "Source", "value": "{{ source }}", "short": true},
-      {"title": "Score", "value": "{{ score }}", "short": true}
-    ]
-  }]
-}"""
-
-_jinja = Environment(loader=BaseLoader(), autoescape=False)
+_email_template = Environment(loader=BaseLoader(), autoescape=True).from_string(_EMAIL_TEMPLATE)
 
 
 class Notifier:
@@ -116,7 +102,7 @@ class Notifier:
             logger.debug("Email not configured; skipping")
             return False
         try:
-            html = _jinja.from_string(_EMAIL_TEMPLATE).render(**context)
+            html = _email_template.render(**context)
             msg = MIMEMultipart("alternative")
             msg["Subject"] = f"[SOC Alert] {context['severity'].upper()}: {context['title']}"
             msg["From"] = self._smtp_from
@@ -125,7 +111,7 @@ class Notifier:
 
             with smtplib.SMTP(self._smtp_host, self._smtp_port, timeout=self._timeout) as server:
                 server.ehlo()
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
                 if self._smtp_username:
                     server.login(self._smtp_username, self._smtp_password)
                 server.sendmail(self._smtp_from, self._smtp_to.split(","), msg.as_string())
@@ -140,8 +126,20 @@ class Notifier:
             logger.debug("Slack webhook not configured; skipping")
             return False
         try:
-            payload_str = _jinja.from_string(_SLACK_TEMPLATE).render(**context)
-            payload = json.loads(payload_str)
+            severity = context["severity"]
+            colors = {"critical": "danger", "high": "warning"}
+            payload = {
+                "text": f":rotating_light: *SOC Alert — {severity.upper()}*",
+                "attachments": [{
+                    "color": colors.get(severity, "good"),
+                    "title": context["title"],
+                    "text": context["description"][:200],
+                    "fields": [
+                        {"title": label, "value": str(context[key]), "short": True}
+                        for label, key in (("Severity", "severity"), ("Source", "source"), ("Score", "score"))
+                    ],
+                }],
+            }
             response = requests.post(
                 self._slack_url, json=payload, timeout=self._timeout
             )
@@ -149,7 +147,7 @@ class Notifier:
             logger.info("Slack alert sent")
             return True
         except Exception as exc:
-            logger.error("Failed to send Slack alert: %s", exc)
+            logger.error("Failed to send Slack alert (%s)", type(exc).__name__)
             return False
 
     def _send_webhook(self, context: dict[str, Any]) -> bool:
@@ -161,10 +159,10 @@ class Notifier:
                 self._webhook_url, json=context, timeout=self._timeout
             )
             response.raise_for_status()
-            logger.info("Webhook alert sent to %s", self._webhook_url)
+            logger.info("Webhook alert sent")
             return True
         except Exception as exc:
-            logger.error("Failed to send webhook alert: %s", exc)
+            logger.error("Failed to send webhook alert (%s)", type(exc).__name__)
             return False
 
     def _default_channels(self, severity: str) -> list[str]:
